@@ -1,0 +1,30 @@
+# Environment & secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Generated artifacts
+reports/
+*.pdf
+logs/
+*.log
+
+# Local Google Sheets fallback storage (contains user PII — never commit)
+data/
+*.docx
