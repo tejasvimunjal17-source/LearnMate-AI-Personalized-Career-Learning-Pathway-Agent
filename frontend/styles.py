@@ -57,13 +57,25 @@ def _theme_vars(dark: bool) -> str:
 
 
 def inject_css(dark_mode: bool = True) -> None:
-    """Inject the full custom design system into the current Streamlit page."""
+    """Inject the full custom design system into the current Streamlit page.
+
+    IMPORTANT: st.markdown() runs its input through a Markdown parser before
+    rendering the HTML. Any line indented 4+ spaces is treated as a
+    Markdown *code block* and gets escaped/printed as literal text instead
+    of being interpreted as HTML - this is what causes raw CSS to "leak"
+    onto the page above the UI. To guarantee that never happens, we build
+    the CSS with normal (readable) Python indentation below, then strip
+    all leading whitespace from every line right before injection. CSS
+    itself doesn't care about indentation, so this is purely a rendering
+    safeguard.
+    """
     theme_vars = _theme_vars(dark_mode)
 
-    st.markdown(
-        f"""
-        <link rel="stylesheet" href="{FONT_IMPORT}">
-        <style>
+    # The Google Fonts <link> is injected in its own single-line markdown
+    # call, kept separate from the <style> block for the same reason.
+    st.markdown(f'<link rel="stylesheet" href="{FONT_IMPORT}">', unsafe_allow_html=True)
+
+    raw_css = f"""
         :root {{
             {theme_vars}
             --violet: #7C5CFF;
@@ -400,7 +412,29 @@ def inject_css(dark_mode: bool = True) -> None:
         @media (max-width: 480px) {{
             div[class*="st-key-lm_chatbot"] {{ right: 10px; bottom: 10px; width: 92vw; }}
         }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+
+        /* ================= White-label: hide Streamlit chrome ================= */
+        /* Hide the top decoration bar and hamburger menu */
+        #MainMenu {{ visibility: hidden; }}
+        header {{ visibility: hidden; }}
+        footer {{ visibility: hidden; }}
+        div[data-testid="stHeader"] {{ display: none !important; }}
+        div[data-testid="stToolbar"] {{ display: none !important; }}
+        div[data-testid="stDecoration"] {{ display: none !important; }}
+        div[data-testid="stStatusWidget"] {{ display: none !important; }}
+
+        /* Hide the Fork/GitHub link if applicable */
+        #GithubIcon {{ visibility: hidden; }}
+
+        /* Remove top spacing left by hidden headers */
+        .block-container {{
+            padding-top: 1rem !important;
+            padding-bottom: 0rem !important;
+        }}
+    """
+
+    # Strip all leading whitespace from every line so Streamlit's Markdown
+    # parser can never mistake indented CSS for a fenced code block (see
+    # the docstring above) — this is the fix for the "raw CSS on screen" bug.
+    css = "\n".join(line.lstrip() for line in raw_css.splitlines())
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
