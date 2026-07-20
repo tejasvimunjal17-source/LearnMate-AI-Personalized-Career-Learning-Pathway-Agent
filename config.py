@@ -2,27 +2,17 @@
 config.py
 ---------
 Centralized, secure configuration loader for the AI Career Learning Pathway app.
-
-All secrets (API keys, project IDs, endpoints) are loaded exclusively from
-environment variables (via a local .env file in development, or platform
-"Secrets" in production e.g. Streamlit Community Cloud / IBM Code Engine).
-
-NOTHING sensitive is hard-coded here. If a required variable is missing,
-the app fails fast with a clear, actionable error instead of running with
-broken credentials.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load variables from a local .env file if present (development convenience).
-# In production (e.g. Streamlit Cloud) secrets are injected as real
-# environment variables / st.secrets, so this call is a harmless no-op.
 _ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH, override=False)
 
@@ -31,29 +21,30 @@ def _get_env(key: str, default: str | None = None, required: bool = False) -> st
     """Fetch an environment variable, optionally trying Streamlit secrets too."""
     value = os.getenv(key, default)
 
-    # Fallback to st.secrets when running on Streamlit Cloud, if available.
     if not value:
         try:
-            import streamlit as st  # local import to avoid hard dependency at import time
+            import streamlit as st
 
-            if hasattr(st, "secrets") and key in st.secrets:
-                value = st.secrets[key]
+            if hasattr(st, "secrets"):
+                if key in st.secrets:
+                    val = st.secrets[key]
+                    if isinstance(val, dict):
+                        value = json.dumps(val)
+                    else:
+                        value = str(val)
+                # Auto-fallback for gcp_service_account block in secrets.toml
+                elif key == "GOOGLE_SERVICE_ACCOUNT_JSON" and "gcp_service_account" in st.secrets:
+                    value = json.dumps(dict(st.secrets["gcp_service_account"]))
         except Exception:
             pass
 
     if required and not value:
-        raise EnvironmentError(
-            f"Missing required environment variable '{key}'. "
-            f"Copy .env.example to .env and set it, or configure it in "
-            f"Streamlit secrets."
-        )
+        raise EnvironmentError(f"Missing required environment variable '{key}'.")
     return value or ""
 
 
 @dataclass(frozen=True)
 class WatsonxConfig:
-    """Immutable, validated configuration for the IBM watsonx.ai connection."""
-
     api_key: str
     project_id: str
     base_url: str
@@ -68,14 +59,6 @@ class WatsonxConfig:
 
 @dataclass(frozen=True)
 class GoogleSheetsConfig:
-    """Configuration for the Google Sheets backend (user registrations + roadmap responses).
-
-    Accepts credentials either as a path to a service-account JSON key file
-    (GOOGLE_SERVICE_ACCOUNT_FILE) or as the raw JSON content itself
-    (GOOGLE_SERVICE_ACCOUNT_JSON) - the latter is convenient for Streamlit
-    Community Cloud secrets, which don't support uploading files.
-    """
-
     service_account_file: str
     service_account_json: str
     users_sheet_name: str
@@ -88,8 +71,6 @@ class GoogleSheetsConfig:
 
 @dataclass(frozen=True)
 class OrchestrateConfig:
-    """Configuration for the IBM watsonx Orchestrate AI Mentor chat widget."""
-
     orchestration_id: str
     host_url: str
     deployment_platform: str
@@ -105,13 +86,10 @@ class OrchestrateConfig:
             and self.agent_id
             and self.agent_environment_id
         )
-    
 
 
 @dataclass(frozen=True)
 class OpenRouterConfig:
-    """Immutable, validated configuration for the OpenRouter chat API."""
-
     api_key: str
     model: str
 
@@ -121,7 +99,6 @@ class OpenRouterConfig:
 
 
 def load_config() -> WatsonxConfig:
-    """Load and return the application's watsonx.ai configuration."""
     return WatsonxConfig(
         api_key=_get_env("WATSONX_API_KEY", required=False),
         project_id=_get_env("WATSONX_PROJECT_ID", required=False),
@@ -133,7 +110,6 @@ def load_config() -> WatsonxConfig:
 
 
 def load_sheets_config() -> GoogleSheetsConfig:
-    """Load and return the Google Sheets backend configuration."""
     return GoogleSheetsConfig(
         service_account_file=_get_env("GOOGLE_SERVICE_ACCOUNT_FILE", required=False),
         service_account_json=_get_env("GOOGLE_SERVICE_ACCOUNT_JSON", required=False),
@@ -145,7 +121,6 @@ def load_sheets_config() -> GoogleSheetsConfig:
 
 
 def load_orchestrate_config() -> OrchestrateConfig:
-    """Load and return the IBM watsonx Orchestrate chat-widget configuration."""
     return OrchestrateConfig(
         orchestration_id=_get_env("WATSONX_ORCHESTRATION_ID"),
         host_url=_get_env("WATSONX_HOST_URL"),
@@ -160,14 +135,12 @@ def load_orchestrate_config() -> OrchestrateConfig:
 
 
 def load_openrouter_config() -> OpenRouterConfig:
-    """Load and return the OpenRouter chat-completions configuration."""
     return OpenRouterConfig(
         api_key=_get_env("OPENROUTER_API_KEY", required=False),
         model=_get_env("OPENROUTER_MODEL", default="openai/gpt-4o-mini"),
     )
 
 
-# Singleton-style config instances used across the app
 CONFIG = load_config()
 SHEETS_CONFIG = load_sheets_config()
 ORCHESTRATE_CONFIG = load_orchestrate_config()
