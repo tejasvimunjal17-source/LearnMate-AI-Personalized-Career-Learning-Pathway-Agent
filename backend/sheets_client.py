@@ -84,9 +84,15 @@ def _get_gspread_client():
 def _get_or_create_worksheet(sheet_name: str, header: list[str]):
     client = _get_gspread_client()
     try:
-        spreadsheet = client.open(sheet_name)
-    except Exception:
-        spreadsheet = client.create(sheet_name)
+        # Check if sheet_name is a full Google Sheets URL
+        if sheet_name.startswith("http"):
+            spreadsheet = client.open_by_url(sheet_name)
+        else:
+            spreadsheet = client.open(sheet_name)
+    except Exception as exc:
+        logger.error("Could not open sheet '%s': %s", sheet_name, exc)
+        raise SheetsUnavailableError(f"Spreadsheet '{sheet_name}' not accessible: {exc}") from exc
+        
     worksheet = spreadsheet.sheet1
     existing_header = worksheet.row_values(1)
     if existing_header != header:
