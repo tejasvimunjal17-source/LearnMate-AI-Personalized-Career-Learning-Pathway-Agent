@@ -123,7 +123,7 @@ with st.sidebar:
 
     NAV_OPTIONS = ["Home", "My Profile", "Career Profile", "AI Roadmap", "Skill Gap",
                    "Courses & Certs", "Progress Tracker", "Dashboard",
-                   "📚 Free Courses", "📄 Resume Builder", "📊 Resume Review", "💼 Job Search"]
+                   "Free Courses", "Resume Builder", "Resume Review", "Job Search"]
     NAV_ICONS = ["house", "person-badge", "person-lines-fill", "signpost-split",
                  "bar-chart-steps", "mortarboard", "check2-square", "grid-1x2",
                  "book", "file-earmark-person", "clipboard-data", "briefcase"]
