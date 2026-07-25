@@ -93,6 +93,10 @@ def inject_css(dark_mode: bool = True) -> None:
             color: var(--text);
         }}
 
+        #MainMenu, footer, header[data-testid="stHeader"] {{
+            background: transparent;
+        }}
+
         /* ---------- Typography ---------- */
         h1, h2, h3, .pathway-display {{
             font-family: 'Space Grotesk', sans-serif !important;
@@ -410,35 +414,41 @@ def inject_css(dark_mode: bool = True) -> None:
         }}
 
         /* ================= White-label: hide Streamlit chrome ================= */
-        /* Ensure the main header container is transparent and non-intrusive */
-        header, div[data-testid="stHeader"] {{
+        /* Hide the hamburger menu, toolbar, decoration bar, and status widget -
+           but WITHOUT hiding the header container itself, because Streamlit
+           renders the sidebar's reopen arrow (collapsedControl) as a child of
+           that header. display:none/visibility:hidden on the header was
+           deleting the reopen arrow along with it, leaving no way to reopen
+           the sidebar once collapsed (root cause of the "sidebar disappears
+           with no way back" bug). Hiding each unwanted piece individually
+           (below) achieves the same white-label look without that bug. */
+        #MainMenu {{ visibility: hidden; }}
+        footer {{ visibility: hidden; }}
+        div[data-testid="stToolbar"] {{ display: none !important; }}
+        div[data-testid="stDecoration"] {{ display: none !important; }}
+        div[data-testid="stStatusWidget"] {{ display: none !important; }}
+
+        /* Keep the header container itself in the layout (so the sidebar's
+           reopen arrow, which lives inside it, keeps working) but make it
+           visually invisible - transparent, borderless, and collapsed to a
+           minimal height instead of removed. */
+        header[data-testid="stHeader"] {{
             background: transparent !important;
-            z-index: 9999 !important;
+            box-shadow: none !important;
+            border: none !important;
+            height: 2.5rem !important;
         }}
 
-        /* FORCE SIDEBAR TOGGLE / EXPAND BUTTON TO REMAIN VISIBLE AT ALL TIMES */
-        [data-testid="stSidebarCollapseButton"],
-        [data-testid="stHeaderNav"],
-        button[aria-label="Expand sidebar"],
-        button[aria-label="Collapse sidebar"] {{
-            display: flex !important;
+        /* Belt-and-suspenders: guarantee the reopen arrow is always visible
+           and clickable, regardless of Streamlit-version DOM nesting. */
+        div[data-testid="collapsedControl"] {{
             visibility: visible !important;
+            display: flex !important;
             opacity: 1 !important;
-            z-index: 10000 !important;
         }}
 
-        /* Hide Streamlit branding elements without hiding the sidebar controls */
-        #MainMenu,
-        footer,
-        #GithubIcon,
-        .stAppDeployButton,
-        div[data-testid="stToolbar"],
-        div[data-testid="stDecoration"],
-        div[data-testid="stStatusWidget"],
-        div[data-testid="stHeaderActionElements"] {{
-            display: none !important;
-            visibility: hidden !important;
-        }}
+        /* Hide the Fork/GitHub link if applicable */
+        #GithubIcon {{ visibility: hidden; }}
 
         /* Remove top spacing left by hidden headers */
         .block-container {{
@@ -448,6 +458,7 @@ def inject_css(dark_mode: bool = True) -> None:
     """
 
     # Strip all leading whitespace from every line so Streamlit's Markdown
-    # parser can never mistake indented CSS for a fenced code block
+    # parser can never mistake indented CSS for a fenced code block (see
+    # the docstring above) — this is the fix for the "raw CSS on screen" bug.
     css = "\n".join(line.lstrip() for line in raw_css.splitlines())
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
