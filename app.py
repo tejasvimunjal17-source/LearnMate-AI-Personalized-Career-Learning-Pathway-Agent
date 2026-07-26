@@ -33,6 +33,7 @@ from frontend.landing import render_landing_page, render_topnav
 from frontend.auth_page import render_auth_page
 from frontend.profile_page import render_profile_page
 from frontend.chatbot import render_chatbot_widget
+from frontend.sidebar_toggle import render_sidebar_toggle
 from frontend.free_courses_page import render_free_courses_page
 from frontend.resume_builder import render_resume_builder_page
 from frontend.resume_review_page import render_resume_review_page
@@ -119,11 +120,12 @@ with st.sidebar:
         f"<p class='muted' style='margin-top:2px;'>Hi, {user['first_name']} 👋</p>",
         unsafe_allow_html=True,
     )
+    render_sidebar_toggle()
     st.markdown("---")
 
     NAV_OPTIONS = ["Home", "My Profile", "Career Profile", "AI Roadmap", "Skill Gap",
                    "Courses & Certs", "Progress Tracker", "Dashboard",
-                   "Free Courses", "Resume Builder", "Resume Review", "Job Search"]
+                   "📚 Free Courses", "📄 Resume Builder", "📊 Resume Review", "💼 Job Search"]
     NAV_ICONS = ["house", "person-badge", "person-lines-fill", "signpost-split",
                  "bar-chart-steps", "mortarboard", "check2-square", "grid-1x2",
                  "book", "file-earmark-person", "clipboard-data", "briefcase"]
@@ -522,10 +524,10 @@ PAGES = {
     "Courses & Certs": render_courses_page,
     "Progress Tracker": render_progress_page,
     "Dashboard": render_dashboard_page,
-    "Free Courses": render_free_courses_page,
-    "Resume Builder": render_resume_builder_page,
-    "Resume Review": render_resume_review_page,
-    "Job Search": render_job_search_page,
+    "📚 Free Courses": render_free_courses_page,
+    "📄 Resume Builder": render_resume_builder_page,
+    "📊 Resume Review": render_resume_review_page,
+    "💼 Job Search": render_job_search_page,
 }
 
 try:
