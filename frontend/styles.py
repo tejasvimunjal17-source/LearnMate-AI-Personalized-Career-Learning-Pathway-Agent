@@ -129,3 +129,4 @@ def render_custom_sidebar_controls() -> None:
         """,
         unsafe_allow_html=True,
     )
+ 
