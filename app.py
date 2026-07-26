@@ -33,7 +33,7 @@ from frontend.landing import render_landing_page, render_topnav
 from frontend.auth_page import render_auth_page
 from frontend.profile_page import render_profile_page
 from frontend.chatbot import render_chatbot_widget
-from frontend.sidebar_toggle import render_sidebar_toggle
+from frontend.custom_sidebar import render_custom_sidebar_controls
 from frontend.free_courses_page import render_free_courses_page
 from frontend.resume_builder import render_resume_builder_page
 from frontend.resume_review_page import render_resume_review_page
@@ -112,6 +112,7 @@ if not AUTHENTICATED:
 # AUTHENTICATED APP
 # ========================================================================
 render_topnav(authenticated=True)
+render_custom_sidebar_controls()
 
 with st.sidebar:
     user = st.session_state["auth_user"]
@@ -120,7 +121,6 @@ with st.sidebar:
         f"<p class='muted' style='margin-top:2px;'>Hi, {user['first_name']} 👋</p>",
         unsafe_allow_html=True,
     )
-    render_sidebar_toggle()
     st.markdown("---")
 
     NAV_OPTIONS = ["Home", "My Profile", "Career Profile", "AI Roadmap", "Skill Gap",
@@ -133,36 +133,31 @@ with st.sidebar:
     if st.session_state["page"] not in NAV_OPTIONS:
         st.session_state["page"] = "Career Profile"
 
-    # Only the visual menu widget is hidden when nav_open is False - the
-    # options list and the page-reset guard above still run unconditionally,
-    # since st.session_state["page"] must stay valid for routing regardless
-    # of whether the menu itself is shown or hidden.
-    if st.session_state.get("nav_open", True):
-        # A stable `key` is required so Streamlit tracks this as the SAME widget
-        # instance across reruns. Without one, streamlit-option-menu's internal
-        # key is derived partly from `default_index` - which itself changes
-        # every time the page changes - so the component effectively looks like
-        # a brand-new widget on every navigation and "forgets" the click,
-        # producing the double-tap lag. Pairing a fixed key with an immediate
-        # st.rerun() the moment the selection changes (rather than quietly
-        # writing to session_state and waiting for the *next* interaction to
-        # pick it up) makes navigation register on the very first click.
-        selected = option_menu(
-            menu_title=None,
-            options=NAV_OPTIONS,
-            icons=NAV_ICONS,
-            default_index=NAV_OPTIONS.index(st.session_state["page"]),
-            key="main_nav",
-            styles={
-                "container": {"padding": "0", "background-color": "transparent"},
-                "icon": {"color": "#7C5CFF", "font-size": "16px"},
-                "nav-link": {"font-size": "14px", "text-align": "left", "margin": "2px 0", "border-radius": "10px"},
-                "nav-link-selected": {"background": "linear-gradient(120deg, #7C5CFF, #22D3B0)", "color": "white"},
-            },
-        )
-        if selected != st.session_state["page"]:
-            st.session_state["page"] = selected
-            st.rerun()
+    # A stable `key` is required so Streamlit tracks this as the SAME widget
+    # instance across reruns. Without one, streamlit-option-menu's internal
+    # key is derived partly from `default_index` - which itself changes
+    # every time the page changes - so the component effectively looks like
+    # a brand-new widget on every navigation and "forgets" the click,
+    # producing the double-tap lag. Pairing a fixed key with an immediate
+    # st.rerun() the moment the selection changes (rather than quietly
+    # writing to session_state and waiting for the *next* interaction to
+    # pick it up) makes navigation register on the very first click.
+    selected = option_menu(
+        menu_title=None,
+        options=NAV_OPTIONS,
+        icons=NAV_ICONS,
+        default_index=NAV_OPTIONS.index(st.session_state["page"]),
+        key="main_nav",
+        styles={
+            "container": {"padding": "0", "background-color": "transparent"},
+            "icon": {"color": "#7C5CFF", "font-size": "16px"},
+            "nav-link": {"font-size": "14px", "text-align": "left", "margin": "2px 0", "border-radius": "10px"},
+            "nav-link-selected": {"background": "linear-gradient(120deg, #7C5CFF, #22D3B0)", "color": "white"},
+        },
+    )
+    if selected != st.session_state["page"]:
+        st.session_state["page"] = selected
+        st.rerun()
 
     st.markdown("---")
     dark = st.toggle("🌙 Dark Mode", value=st.session_state["dark_mode"])
