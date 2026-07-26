@@ -1,132 +1,482 @@
 """
-frontend/custom_sidebar.py
------------------------------
-A Gmail/Drive-style collapsible sidebar "drawer" for LearnMate AI.
+frontend/styles.py
+---------------------
+Design system for the "AI Career Learning Pathway" app.
 
-How it works (read before touching this file)
-------------------------------------------------
-Streamlit provides no public API to resize, hide, or animate its own
-sidebar - so any custom collapsible sidebar necessarily has to reach it
-via CSS targeting Streamlit's own DOM. This file does exactly that, and
-ONLY that: there is no JavaScript anywhere in this file, no click
-simulation, no reading/writing Streamlit's internal JS state, and no
-iframe. The only Streamlit-internal selectors touched are:
+Concept: the "Pathway" — a glowing constellation trail that represents the
+student's journey from where they are to their career goal. Dark, ink-navy
+base (mirroring a night sky) with a violet -> teal "aurora" gradient marking
+progress, since the whole product's job is to plot and light up a path.
 
-    section[data-testid="stSidebar"]        - the sidebar container itself,
-                                               whose WIDTH is animated
-                                               (0 <-> full) based on
-                                               st.session_state
-    [data-testid="collapsedControl"],
-    [data-testid="stSidebarCollapseButton"] - Streamlit's own native
-                                               collapse arrow, hidden via
-                                               display:none so it doesn't
-                                               sit on screen duplicating
-                                               our 🎓 button
+Palette:
+    Ink Navy      #0F1229   (dark surface base)
+    Paper         #F7F8FC   (light surface base)
+    Aurora Violet #7C5CFF   (primary accent - "where you're headed")
+    Aurora Teal   #22D3B0   (secondary accent - "progress / growth")
+    Slate Text    #2A2F45
+    Muted Grey    #8A8FA3
 
-Everything inside the existing `with st.sidebar:` block in app.py (logo,
-nav menu, Dark Mode, Logout, status captions) is completely untouched -
-nothing is moved out of st.sidebar. The drawer effect comes purely from
-animating that container's width via CSS, which is fundamentally how
-Streamlit's own native sidebar-collapse already works visually. Since
-Streamlit lays the sidebar and main content out as flex siblings,
-shrinking the sidebar's width to 0 makes the main content reflow to fill
-the freed space automatically - no separate rule targeting the main
-content area is needed.
-
-State
-------
-st.session_state["sidebar_open"] is the single source of truth (default
-True). No JavaScript state, no browser storage - a plain Python boolean,
-recomputed into CSS on every rerun.
+Type:
+    Display : "Space Grotesk" - geometric, technical, distinctive headings
+    Body    : "Inter" - clean, highly legible body copy
+    Mono    : "JetBrains Mono" - stats, numbers, data labels
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-_SIDEBAR_OPEN_WIDTH = "21rem"
-_TRANSITION_MS = 300
+FONT_IMPORT = (
+    "https://fonts.googleapis.com/css2?"
+    "family=Space+Grotesk:wght@500;600;700&"
+    "family=Inter:wght@400;500;600;700&"
+    "family=JetBrains+Mono:wght@500;600&display=swap"
+)
 
 
-def render_custom_sidebar_controls() -> None:
-    """Render the 🎓 drawer toggle and apply the resulting open/closed CSS.
+def _theme_vars(dark: bool) -> str:
+    if dark:
+        return """
+        --bg: #0F1229;
+        --bg-elevated: #161A3A;
+        --surface: rgba(255,255,255,0.045);
+        --surface-border: rgba(255,255,255,0.09);
+        --text: #EDEEFB;
+        --text-muted: #9DA3C0;
+        --shadow: 0 8px 30px rgba(0,0,0,0.35);
+        """
+    return """
+        --bg: #F7F8FC;
+        --bg-elevated: #FFFFFF;
+        --surface: rgba(15,18,41,0.035);
+        --surface-border: rgba(15,18,41,0.08);
+        --text: #1B1E33;
+        --text-muted: #5B6079;
+        --shadow: 0 8px 24px rgba(30,32,70,0.08);
+        """
 
-    Call this once, early in app.py, OUTSIDE of `with st.sidebar:` - the
-    toggle button is fixed-position and independent of the sidebar's own
-    box, so it doesn't need to live inside the sidebar to work, and
-    staying outside keeps it unaffected by the sidebar's width transition.
+
+def inject_css(dark_mode: bool = True) -> None:
+    """Inject the full custom design system into the current Streamlit page.
+
+    IMPORTANT: st.markdown() runs its input through a Markdown parser before
+    rendering the HTML. Any line indented 4+ spaces is treated as a
+    Markdown *code block* and gets escaped/printed as literal text instead
+    of being interpreted as HTML - this is what causes raw CSS to "leak"
+    onto the page above the UI. To guarantee that never happens, we build
+    the CSS with normal (readable) Python indentation below, then strip
+    all leading whitespace from every line right before injection. CSS
+    itself doesn't care about indentation, so this is purely a rendering
+    safeguard.
     """
-    st.session_state.setdefault("sidebar_open", True)
+    theme_vars = _theme_vars(dark_mode)
 
-    # ---- Toggle button: rendered in its own container so it can be
-    # precisely targeted by CSS and pinned to the viewport corner,
-    # completely independent of the sidebar's own animated box. ----
-    with st.container(key="lm_drawer_toggle"):
-        clicked = st.button(
-            "🎓", key="lm_drawer_toggle_btn", help="Open / Close Navigation"
-        )
-    if clicked:
-        st.session_state["sidebar_open"] = not st.session_state["sidebar_open"]
+    # The Google Fonts <link> is injected in its own single-line markdown
+    # call, kept separate from the <style> block for the same reason.
+    st.markdown(f'<link rel="stylesheet" href="{FONT_IMPORT}">', unsafe_allow_html=True)
 
-    is_open = st.session_state["sidebar_open"]
-    width = _SIDEBAR_OPEN_WIDTH if is_open else "0rem"
-    opacity = "1" if is_open else "0"
-    pointer_events = "auto" if is_open else "none"
-    border_width = "1px" if is_open else "0px"
-
-    st.markdown(
-        f"""
-        <style>
-        /* ---- Fixed toggle button: always visible, always in the same
-        spot, regardless of the drawer's open/closed state. ---- */
-        div[class*="st-key-lm_drawer_toggle"] {{
-            position: fixed;
-            top: 14px;
-            left: 14px;
-            z-index: 1000000;
+    raw_css = f"""
+        :root {{
+            {theme_vars}
+            --violet: #7C5CFF;
+            --teal: #22D3B0;
+            --gradient: linear-gradient(120deg, #7C5CFF 0%, #22D3B0 100%);
+            --radius: 18px;
         }}
-        div[class*="st-key-lm_drawer_toggle_btn"] button {{
-            width: 44px;
-            height: 44px;
-            border-radius: 14px;
-            padding: 0;
-            font-size: 1.2rem;
-            box-shadow: 0 6px 18px rgba(124,92,255,0.30);
-            transition: transform 280ms ease, box-shadow 280ms ease;
+
+        html, body, [class*="css"] {{
+            font-family: 'Inter', sans-serif;
         }}
-        div[class*="st-key-lm_drawer_toggle_btn"] button:hover {{
-            transform: translateY(-2px) scale(1.05);
+
+        .stApp {{
+            background: var(--bg);
+            color: var(--text);
+        }}
+
+        #MainMenu, footer, header[data-testid="stHeader"] {{
+            background: transparent;
+        }}
+
+        /* ---------- Typography ---------- */
+        h1, h2, h3, .pathway-display {{
+            font-family: 'Space Grotesk', sans-serif !important;
+            letter-spacing: -0.01em;
+            color: var(--text);
+        }}
+        p, span, label, div {{
+            color: var(--text);
+        }}
+        .muted {{ color: var(--text-muted) !important; }}
+        .mono {{ font-family: 'JetBrains Mono', monospace; }}
+
+        /* ---------- Hero ---------- */
+        .hero {{
+            padding: 2.2rem 2rem;
+            border-radius: var(--radius);
+            background: radial-gradient(120% 160% at 0% 0%, rgba(124,92,255,0.18), transparent 60%),
+                        radial-gradient(120% 160% at 100% 0%, rgba(34,211,176,0.14), transparent 55%),
+                        var(--bg-elevated);
+            border: 1px solid var(--surface-border);
+            box-shadow: var(--shadow);
+            margin-bottom: 1.6rem;
+            position: relative;
+            overflow: hidden;
+        }}
+        .hero-eyebrow {{
+            display: inline-block;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--teal);
+            background: rgba(34,211,176,0.12);
+            border: 1px solid rgba(34,211,176,0.3);
+            padding: 4px 10px;
+            border-radius: 100px;
+            margin-bottom: 0.9rem;
+        }}
+        .hero h1 {{
+            font-size: 2.1rem;
+            margin: 0 0 0.4rem 0;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+
+        /* ---------- Glass Cards ---------- */
+        .glass-card {{
+            background: var(--bg-elevated);
+            border: 1px solid var(--surface-border);
+            border-radius: var(--radius);
+            padding: 1.4rem 1.5rem;
+            box-shadow: var(--shadow);
+            margin-bottom: 1.1rem;
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+            animation: fadeInUp 0.5s ease both;
+        }}
+        .glass-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 14px 34px rgba(124,92,255,0.16);
+        }}
+
+        .metric-card {{
+            background: var(--bg-elevated);
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            padding: 1.1rem 1.2rem;
+            box-shadow: var(--shadow);
+            animation: fadeInUp 0.5s ease both;
+        }}
+        .metric-value {{
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .metric-label {{
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }}
+
+        /* ---------- Pathway / milestone timeline (signature element) ---------- */
+        .pathway-node {{
+            position: relative;
+            padding: 1rem 1.2rem 1rem 2.6rem;
+            margin-bottom: 0.1rem;
+            border-left: 2px solid var(--surface-border);
+        }}
+        .pathway-node::before {{
+            content: "";
+            position: absolute;
+            left: -9px;
+            top: 1.3rem;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--gradient);
+            box-shadow: 0 0 0 4px var(--bg), 0 0 14px rgba(124,92,255,0.6);
+        }}
+        .pathway-node:last-child {{ border-left: 2px solid transparent; }}
+        .week-chip {{
+            display: inline-block;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--violet);
+            background: rgba(124,92,255,0.12);
+            border: 1px solid rgba(124,92,255,0.3);
+            padding: 2px 9px;
+            border-radius: 100px;
+            margin-bottom: 0.4rem;
+        }}
+
+        /* ---------- Badges / pills ---------- */
+        .pill {{
+            display: inline-block;
+            font-size: 0.76rem;
+            padding: 3px 10px;
+            border-radius: 100px;
+            margin: 2px 4px 2px 0;
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            color: var(--text);
+        }}
+        .pill-high {{ color: #FF6B81; border-color: rgba(255,107,129,0.4); background: rgba(255,107,129,0.1); }}
+        .pill-medium {{ color: #FFC24B; border-color: rgba(255,194,75,0.4); background: rgba(255,194,75,0.1); }}
+        .pill-low {{ color: #22D3B0; border-color: rgba(34,211,176,0.4); background: rgba(34,211,176,0.1); }}
+
+        /* ---------- Progress bars ---------- */
+        .progress-track {{
+            width: 100%;
+            height: 10px;
+            border-radius: 100px;
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            overflow: hidden;
+        }}
+        .progress-fill {{
+            height: 100%;
+            border-radius: 100px;
+            background: var(--gradient);
+            animation: growBar 1s ease-out both;
+        }}
+        @keyframes growBar {{
+            from {{ width: 0%; }}
+        }}
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(10px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+
+        /* ---------- Buttons ---------- */
+        .stButton > button, .stDownloadButton > button {{
+            background: var(--gradient) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 12px !important;
+            padding: 0.6rem 1.3rem !important;
+            font-weight: 600 !important;
+            box-shadow: 0 6px 18px rgba(124,92,255,0.35);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }}
+        .stButton > button:hover, .stDownloadButton > button:hover {{
+            transform: translateY(-2px);
             box-shadow: 0 10px 24px rgba(124,92,255,0.45);
         }}
 
-        /* ---- The drawer itself: Streamlit's own sidebar container,
-        width-animated between 0 and its normal width. Main content
-        reflows automatically since it's a flex sibling of this element -
-        no separate rule targeting main content is needed. ---- */
-        section[data-testid="stSidebar"] {{
-            width: {width} !important;
-            min-width: {width} !important;
-            max-width: {width} !important;
-            border-right-width: {border_width} !important;
-            opacity: {opacity};
-            pointer-events: {pointer_events};
-            overflow: hidden !important;
-            transition: width {_TRANSITION_MS}ms ease,
-                        min-width {_TRANSITION_MS}ms ease,
-                        max-width {_TRANSITION_MS}ms ease,
-                        opacity {_TRANSITION_MS - 50}ms ease;
+        /* ---------- Inputs ---------- */
+        .stTextInput input, .stNumberInput input, .stTextArea textarea,
+        .stSelectbox div[data-baseweb="select"] > div {{
+            background: var(--bg-elevated) !important;
+            border-radius: 10px !important;
+            border: 1px solid var(--surface-border) !important;
+            color: var(--text) !important;
         }}
 
-        /* ---- Hide Streamlit's own native collapse control - fully
-        replaced by our 🎓 button above, so it shouldn't also be on
-        screen. This is a presentational display:none, not a click or a
-        state read - it doesn't affect this drawer's own logic at all. ---- */
-        div[data-testid="stSidebarCollapseButton"],
-        div[data-testid="collapsedControl"] {{
-            display: none !important;
+        /* ---------- Sidebar ---------- */
+        section[data-testid="stSidebar"] {{
+            background: var(--bg-elevated);
+            border-right: 1px solid var(--surface-border);
         }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
- 
+
+        /* ---------- Scrollbar ---------- */
+        ::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+        ::-webkit-scrollbar-thumb {{ background: var(--surface-border); border-radius: 8px; }}
+
+        /* ---------- Responsive tweaks ---------- */
+        @media (max-width: 768px) {{
+            .hero {{ padding: 1.4rem 1.2rem; }}
+            .hero h1 {{ font-size: 1.5rem; }}
+            .glass-card {{ padding: 1.1rem; }}
+        }}
+
+        /* Respect reduced motion preference */
+        @media (prefers-reduced-motion: reduce) {{
+            .glass-card, .metric-card, .progress-fill {{ animation: none !important; }}
+        }}
+
+        /* ================= Landing Page ================= */
+        .lm-topnav {{
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 999;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.9rem 2rem;
+            background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--surface-border);
+        }}
+        .lm-topnav-brand {{
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1.15rem;
+        }}
+        .lm-topnav-ai {{
+            background: var(--gradient);
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .lm-topnav-links {{
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }}
+        @media (max-width: 640px) {{
+            .lm-topnav-links {{ display: none; }} /* collapses on mobile - hamburger sidebar covers nav */
+        }}
+
+        .lm-hero {{
+            text-align: center;
+            padding: 3.4rem 1.5rem 2.2rem 1.5rem;
+            border-radius: var(--radius);
+            background: radial-gradient(120% 160% at 50% 0%, rgba(124,92,255,0.22), transparent 60%),
+                        radial-gradient(90% 140% at 80% 20%, rgba(34,211,176,0.16), transparent 55%),
+                        var(--bg-elevated);
+            border: 1px solid var(--surface-border);
+            box-shadow: var(--shadow);
+            margin-bottom: 1.8rem;
+            animation: fadeInUp 0.6s ease both;
+        }}
+        .lm-hero-badge {{
+            display: inline-block;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.74rem;
+            letter-spacing: 0.06em;
+            color: var(--teal);
+            background: rgba(34,211,176,0.12);
+            border: 1px solid rgba(34,211,176,0.3);
+            padding: 5px 14px;
+            border-radius: 100px;
+            margin-bottom: 1.2rem;
+        }}
+        .lm-hero-title {{
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 2.6rem;
+            line-height: 1.15;
+            margin: 0 0 1rem 0;
+            background: var(--gradient);
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .lm-hero-sub {{
+            max-width: 620px;
+            margin: 0 auto;
+            color: var(--text-muted);
+            font-size: 1.02rem;
+        }}
+        .lm-section-title {{
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.4rem;
+            text-align: center;
+            margin: 1.6rem 0 1.2rem 0;
+        }}
+        .lm-feature-card {{ text-align: left; min-height: 150px; }}
+        .lm-feature-icon {{ font-size: 1.6rem; margin-bottom: 0.4rem; }}
+        .lm-feature-title {{ font-weight: 700; margin-bottom: 4px; }}
+        .lm-feature-desc {{ font-size: 0.85rem; line-height: 1.4; }}
+        .lm-footer {{
+            text-align: center;
+            padding: 1.6rem;
+            border-top: 1px solid var(--surface-border);
+            margin-top: 1rem;
+        }}
+
+        @media (max-width: 768px) {{
+            .lm-hero-title {{ font-size: 1.8rem; }}
+        }}
+
+        /* ================= Floating AI Mentor chatbot ================= */
+        div[class*="st-key-lm_chatbot"] {{
+            position: fixed !important;
+            bottom: 22px;
+            right: 22px;
+            z-index: 1000;
+            width: min(360px, 90vw);
+            max-height: 78vh;
+            overflow-y: auto;
+            background: var(--bg-elevated);
+            border: 1px solid var(--surface-border);
+            border-radius: 18px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+            padding: 0.9rem 1rem;
+        }}
+        div[class*="st-key-lm_chatbot"] .stButton > button {{
+            width: 100%;
+        }}
+        @media (max-width: 480px) {{
+            div[class*="st-key-lm_chatbot"] {{ right: 10px; bottom: 10px; width: 92vw; }}
+        }}
+
+        /* ================= Sidebar nav-menu toggle (🎓) ================= */
+        div[class*="st-key-lm_nav_toggle_btn"] button {{
+            border-radius: 14px !important;
+            width: 44px !important;
+            height: 44px !important;
+            padding: 0 !important;
+            font-size: 1.2rem !important;
+            box-shadow: 0 6px 18px rgba(124,92,255,0.30) !important;
+            transition: transform 280ms ease, box-shadow 280ms ease !important;
+        }}
+        div[class*="st-key-lm_nav_toggle_btn"] button:hover {{
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 10px 24px rgba(124,92,255,0.45) !important;
+        }}
+        div[class*="st-key-lm_nav_toggle_btn"] button:active {{
+            transform: translateY(0) scale(0.95);
+        }}
+
+        /* ================= White-label: hide Streamlit chrome ================= */
+        /* Hide the hamburger menu, toolbar, decoration bar, and status widget -
+           but WITHOUT hiding the header container itself, because Streamlit
+           renders the sidebar's reopen arrow (collapsedControl) as a child of
+           that header. display:none/visibility:hidden on the header was
+           deleting the reopen arrow along with it, leaving no way to reopen
+           the sidebar once collapsed (root cause of the "sidebar disappears
+           with no way back" bug). Hiding each unwanted piece individually
+           (below) achieves the same white-label look without that bug. */
+        #MainMenu {{ visibility: hidden; }}
+        footer {{ visibility: hidden; }}
+        div[data-testid="stToolbar"] {{ display: none !important; }}
+        div[data-testid="stDecoration"] {{ display: none !important; }}
+        div[data-testid="stStatusWidget"] {{ display: none !important; }}
+
+        /* Keep the header container itself in the layout (so the sidebar's
+           reopen arrow, which lives inside it, keeps working) but make it
+           visually invisible - transparent, borderless, and collapsed to a
+           minimal height instead of removed. */
+        header[data-testid="stHeader"] {{
+            background: transparent !important;
+            box-shadow: none !important;
+            border: none !important;
+            height: 2.5rem !important;
+        }}
+
+        /* Belt-and-suspenders: guarantee the reopen arrow is always visible
+           and clickable, regardless of Streamlit-version DOM nesting. */
+        div[data-testid="collapsedControl"] {{
+            visibility: visible !important;
+            display: flex !important;
+            opacity: 1 !important;
+        }}
+
+        /* Hide the Fork/GitHub link if applicable */
+        #GithubIcon {{ visibility: hidden; }}
+
+        /* Remove top spacing left by hidden headers */
+        .block-container {{
+            padding-top: 1rem !important;
+            padding-bottom: 0rem !important;
+        }}
+    """
+
+    # Strip all leading whitespace from every line so Streamlit's Markdown
+    # parser can never mistake indented CSS for a fenced code block (see
+    # the docstring above) — this is the fix for the "raw CSS on screen" bug.
+    css = "\n".join(line.lstrip() for line in raw_css.splitlines())
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
