@@ -1,134 +1,129 @@
 """
 frontend/custom_sidebar.py
 -----------------------------
-A Gmail/Drive-style fixed sliding drawer for LearnMate AI using CSS transforms.
-Zero width-based animation, zero ghost slivers, zero layout jumps.
+A Gmail/Drive-style collapsible sidebar "drawer" for LearnMate AI.
+
+How it works (read before touching this file)
+------------------------------------------------
+Streamlit provides no public API to resize, hide, or animate its own
+sidebar - so any custom collapsible sidebar necessarily has to reach it
+via CSS targeting Streamlit's own DOM. This file does exactly that, and
+ONLY that: there is no JavaScript anywhere in this file, no click
+simulation, no reading/writing Streamlit's internal JS state, and no
+iframe. The only Streamlit-internal selectors touched are:
+
+    section[data-testid="stSidebar"]        - the sidebar container itself,
+                                               whose WIDTH is animated
+                                               (0 <-> full) based on
+                                               st.session_state
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"] - Streamlit's own native
+                                               collapse arrow, hidden via
+                                               display:none so it doesn't
+                                               sit on screen duplicating
+                                               our 🎓 button
+
+Everything inside the existing `with st.sidebar:` block in app.py (logo,
+nav menu, Dark Mode, Logout, status captions) is completely untouched -
+nothing is moved out of st.sidebar. The drawer effect comes purely from
+animating that container's width via CSS, which is fundamentally how
+Streamlit's own native sidebar-collapse already works visually. Since
+Streamlit lays the sidebar and main content out as flex siblings,
+shrinking the sidebar's width to 0 makes the main content reflow to fill
+the freed space automatically - no separate rule targeting the main
+content area is needed.
+
+State
+------
+st.session_state["sidebar_open"] is the single source of truth (default
+True). No JavaScript state, no browser storage - a plain Python boolean,
+recomputed into CSS on every rerun.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-_DRAWER_WIDTH = "21rem"
-_TRANSITION_SPEED = "300ms cubic-bezier(0.4, 0.0, 0.2, 1)"
+_SIDEBAR_OPEN_WIDTH = "21rem"
+_TRANSITION_MS = 300
 
 
 def render_custom_sidebar_controls() -> None:
-    """Render the floating 🎓 toggle button, mobile backdrop overlay,
-    and CSS transform rules for the custom drawer.
-    
-    Call this once, early in app.py, OUTSIDE of `with st.sidebar:`.
+    """Render the 🎓 drawer toggle and apply the resulting open/closed CSS.
+
+    Call this once, early in app.py, OUTSIDE of `with st.sidebar:` - the
+    toggle button is fixed-position and independent of the sidebar's own
+    box, so it doesn't need to live inside the sidebar to work, and
+    staying outside keeps it unaffected by the sidebar's width transition.
     """
     st.session_state.setdefault("sidebar_open", True)
 
-    # 1. Floating Toggle Button (Fixed on top-left of screen)
+    # ---- Toggle button: rendered in its own container so it can be
+    # precisely targeted by CSS and pinned to the viewport corner,
+    # completely independent of the sidebar's own animated box. ----
     with st.container(key="lm_drawer_toggle"):
         clicked = st.button(
-            "🎓", key="lm_drawer_toggle_btn", help="Toggle Navigation Drawer"
+            "🎓", key="lm_drawer_toggle_btn", help="Open / Close Navigation"
         )
     if clicked:
         st.session_state["sidebar_open"] = not st.session_state["sidebar_open"]
 
     is_open = st.session_state["sidebar_open"]
-
-    # 2. Backdrop Overlay (Visible on mobile/small viewports when open)
-    with st.container(key="lm_drawer_backdrop"):
-        backdrop_clicked = st.button(
-            "", key="lm_drawer_backdrop_btn", help="Close Navigation"
-        )
-    if backdrop_clicked:
-        st.session_state["sidebar_open"] = False
-
-    # CSS Transform Calculations
-    transform_val = "translateX(0)" if is_open else "translateX(-100%)"
-    backdrop_display = "block" if is_open else "none"
-    desktop_content_margin = _DRAWER_WIDTH if is_open else "0rem"
+    width = _SIDEBAR_OPEN_WIDTH if is_open else "0rem"
+    opacity = "1" if is_open else "0"
+    pointer_events = "auto" if is_open else "none"
+    border_width = "1px" if is_open else "0px"
 
     st.markdown(
         f"""
         <style>
-        /* ---- Hide Native Streamlit Sidebar Controls ---- */
+        /* ---- Fixed toggle button: always visible, always in the same
+        spot, regardless of the drawer's open/closed state. ---- */
+        div[class*="st-key-lm_drawer_toggle"] {{
+            position: fixed;
+            top: 14px;
+            left: 14px;
+            z-index: 1000000;
+        }}
+        div[class*="st-key-lm_drawer_toggle_btn"] button {{
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            padding: 0;
+            font-size: 1.2rem;
+            box-shadow: 0 6px 18px rgba(124,92,255,0.30);
+            transition: transform 280ms ease, box-shadow 280ms ease;
+        }}
+        div[class*="st-key-lm_drawer_toggle_btn"] button:hover {{
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 10px 24px rgba(124,92,255,0.45);
+        }}
+
+        /* ---- The drawer itself: Streamlit's own sidebar container,
+        width-animated between 0 and its normal width. Main content
+        reflows automatically since it's a flex sibling of this element -
+        no separate rule targeting main content is needed. ---- */
+        section[data-testid="stSidebar"] {{
+            width: {width} !important;
+            min-width: {width} !important;
+            max-width: {width} !important;
+            border-right-width: {border_width} !important;
+            opacity: {opacity};
+            pointer-events: {pointer_events};
+            overflow: hidden !important;
+            transition: width {_TRANSITION_MS}ms ease,
+                        min-width {_TRANSITION_MS}ms ease,
+                        max-width {_TRANSITION_MS}ms ease,
+                        opacity {_TRANSITION_MS - 50}ms ease;
+        }}
+
+        /* ---- Hide Streamlit's own native collapse control - fully
+        replaced by our 🎓 button above, so it shouldn't also be on
+        screen. This is a presentational display:none, not a click or a
+        state read - it doesn't affect this drawer's own logic at all. ---- */
         div[data-testid="stSidebarCollapseButton"],
         div[data-testid="collapsedControl"] {{
             display: none !important;
-        }}
-
-        /* ---- Fixed 🎓 Toggle Button ---- */
-        div[class*="st-key-lm_drawer_toggle"] {{
-            position: fixed !important;
-            top: 14px !important;
-            left: 14px !important;
-            z-index: 1000001 !important;
-        }}
-        div[class*="st-key-lm_drawer_toggle_btn"] button {{
-            width: 44px !important;
-            height: 44px !important;
-            border-radius: 12px !important;
-            padding: 0 !important;
-            font-size: 1.25rem !important;
-            background-color: var(--background-color, #ffffff) !important;
-            border: 1px solid rgba(124, 92, 255, 0.2) !important;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1) !important;
-            transition: transform 200ms ease, box-shadow 200ms ease !important;
-            cursor: pointer !important;
-        }}
-        div[class*="st-key-lm_drawer_toggle_btn"] button:hover {{
-            transform: scale(1.05) !important;
-            box-shadow: 0 6px 20px rgba(124, 92, 255, 0.25) !important;
-        }}
-
-        /* ---- Transform-Based Fixed Drawer ---- */
-        section[data-testid="stSidebar"] {{
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            height: 100vh !important;
-            width: {_DRAWER_WIDTH} !important;
-            min-width: {_DRAWER_WIDTH} !important;
-            max-width: {_DRAWER_WIDTH} !important;
-            z-index: 1000000 !important;
-            transform: {transform_val} !important;
-            transition: transform {_TRANSITION_SPEED} !important;
-            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15) !important;
-            overflow-y: auto !important;
-            visibility: visible !important;
-        }}
-
-        /* ---- Main Content Adjustment (Desktop) ---- */
-        @media (min-width: 769px) {{
-            .stMainBlockContainer,
-            div[data-testid="stMain"] {{
-                margin-left: {desktop_content_margin} !important;
-                transition: margin-left {_TRANSITION_SPEED} !important;
-                width: auto !important;
-            }}
-        }}
-
-        /* ---- Mobile Overlay & Backdrop (Mobile <= 768px) ---- */
-        div[class*="st-key-lm_drawer_backdrop"] {{
-            display: {backdrop_display} !important;
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            z-index: 999999 !important;
-        }}
-        div[class*="st-key-lm_drawer_backdrop_btn"] button {{
-            width: 100vw !important;
-            height: 100vh !important;
-            background: rgba(0, 0, 0, 0.4) !important;
-            border: none !important;
-            border-radius: 0 !important;
-            padding: 0 !important;
-            cursor: pointer !important;
-        }}
-
-        @media (max-width: 768px) {{
-            .stMainBlockContainer,
-            div[data-testid="stMain"] {{
-                margin-left: 0rem !important;
-            }}
         }}
         </style>
         """,
