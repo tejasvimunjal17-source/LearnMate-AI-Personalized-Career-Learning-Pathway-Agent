@@ -413,15 +413,57 @@ def inject_css(dark_mode: bool = True) -> None:
             div[class*="st-key-lm_chatbot"] {{ right: 10px; bottom: 10px; width: 92vw; }}
         }}
 
+        /* ================= Sidebar nav-menu toggle (🎓) ================= */
+        div[class*="st-key-lm_nav_toggle_btn"] button {{
+            border-radius: 14px !important;
+            width: 44px !important;
+            height: 44px !important;
+            padding: 0 !important;
+            font-size: 1.2rem !important;
+            box-shadow: 0 6px 18px rgba(124,92,255,0.30) !important;
+            transition: transform 280ms ease, box-shadow 280ms ease !important;
+        }}
+        div[class*="st-key-lm_nav_toggle_btn"] button:hover {{
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 10px 24px rgba(124,92,255,0.45) !important;
+        }}
+        div[class*="st-key-lm_nav_toggle_btn"] button:active {{
+            transform: translateY(0) scale(0.95);
+        }}
+
         /* ================= White-label: hide Streamlit chrome ================= */
-        /* Hide the top decoration bar and hamburger menu */
+        /* Hide the hamburger menu, toolbar, decoration bar, and status widget -
+           but WITHOUT hiding the header container itself, because Streamlit
+           renders the sidebar's reopen arrow (collapsedControl) as a child of
+           that header. display:none/visibility:hidden on the header was
+           deleting the reopen arrow along with it, leaving no way to reopen
+           the sidebar once collapsed (root cause of the "sidebar disappears
+           with no way back" bug). Hiding each unwanted piece individually
+           (below) achieves the same white-label look without that bug. */
         #MainMenu {{ visibility: hidden; }}
-        header {{ visibility: hidden; }}
         footer {{ visibility: hidden; }}
-        div[data-testid="stHeader"] {{ display: none !important; }}
         div[data-testid="stToolbar"] {{ display: none !important; }}
         div[data-testid="stDecoration"] {{ display: none !important; }}
         div[data-testid="stStatusWidget"] {{ display: none !important; }}
+
+        /* Keep the header container itself in the layout (so the sidebar's
+           reopen arrow, which lives inside it, keeps working) but make it
+           visually invisible - transparent, borderless, and collapsed to a
+           minimal height instead of removed. */
+        header[data-testid="stHeader"] {{
+            background: transparent !important;
+            box-shadow: none !important;
+            border: none !important;
+            height: 2.5rem !important;
+        }}
+
+        /* Belt-and-suspenders: guarantee the reopen arrow is always visible
+           and clickable, regardless of Streamlit-version DOM nesting. */
+        div[data-testid="collapsedControl"] {{
+            visibility: visible !important;
+            display: flex !important;
+            opacity: 1 !important;
+        }}
 
         /* Hide the Fork/GitHub link if applicable */
         #GithubIcon {{ visibility: hidden; }}
