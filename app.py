@@ -536,3 +536,4 @@ except Exception as exc:  # noqa: BLE001 - top-level safety net
     logger.exception("Unhandled error rendering page '%s'", st.session_state["page"])
     st.error(f"An unexpected error occurred: {exc}")
     st.caption("Please refresh the page or check the logs for more details.")
+ 
