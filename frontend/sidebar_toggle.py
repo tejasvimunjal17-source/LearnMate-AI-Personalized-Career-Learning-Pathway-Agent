@@ -36,35 +36,3 @@ def render_sidebar_toggle() -> None:
 
     if clicked:
         st.session_state["nav_open"] = not st.session_state["nav_open"]
-
-    function bind() {
-        var btn = document.getElementById('lm-sidebar-toggle-btn');
-        if (!btn || btn.dataset.lmBound === "1") return;
-        btn.dataset.lmBound = "1";
-        btn.addEventListener('click', function (e) {
-            e.preventDefault();
-            var target = findNativeToggle();
-            if (target) target.click();
-        });
-    }
-
-    bind();
-    // Retry briefly in case this script runs before the button/native
-    // control exist yet (component iframes can mount slightly ahead of
-    // the rest of the page on first load).
-    setTimeout(bind, 150);
-    setTimeout(bind, 500);
-})();
-</script>
-"""
-
-
-def render_sidebar_toggle() -> None:
-    """Render the floating 🎓 sidebar open/close button.
-
-    Call this from inside `with st.sidebar:`, wherever it should appear
-    (below the logo, above the nav menu). Purely presentational - it only
-    clicks Streamlit's own native sidebar toggle; no app state is read or
-    written.
-    """
-    components.html(_TOGGLE_HTML, height=64, scrolling=False)
