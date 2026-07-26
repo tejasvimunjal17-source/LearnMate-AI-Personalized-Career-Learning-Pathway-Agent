@@ -133,31 +133,36 @@ with st.sidebar:
     if st.session_state["page"] not in NAV_OPTIONS:
         st.session_state["page"] = "Career Profile"
 
-    # A stable `key` is required so Streamlit tracks this as the SAME widget
-    # instance across reruns. Without one, streamlit-option-menu's internal
-    # key is derived partly from `default_index` - which itself changes
-    # every time the page changes - so the component effectively looks like
-    # a brand-new widget on every navigation and "forgets" the click,
-    # producing the double-tap lag. Pairing a fixed key with an immediate
-    # st.rerun() the moment the selection changes (rather than quietly
-    # writing to session_state and waiting for the *next* interaction to
-    # pick it up) makes navigation register on the very first click.
-    selected = option_menu(
-        menu_title=None,
-        options=NAV_OPTIONS,
-        icons=NAV_ICONS,
-        default_index=NAV_OPTIONS.index(st.session_state["page"]),
-        key="main_nav",
-        styles={
-            "container": {"padding": "0", "background-color": "transparent"},
-            "icon": {"color": "#7C5CFF", "font-size": "16px"},
-            "nav-link": {"font-size": "14px", "text-align": "left", "margin": "2px 0", "border-radius": "10px"},
-            "nav-link-selected": {"background": "linear-gradient(120deg, #7C5CFF, #22D3B0)", "color": "white"},
-        },
-    )
-    if selected != st.session_state["page"]:
-        st.session_state["page"] = selected
-        st.rerun()
+    # Only the visual menu widget is hidden when nav_open is False - the
+    # options list and the page-reset guard above still run unconditionally,
+    # since st.session_state["page"] must stay valid for routing regardless
+    # of whether the menu itself is shown or hidden.
+    if st.session_state.get("nav_open", True):
+        # A stable `key` is required so Streamlit tracks this as the SAME widget
+        # instance across reruns. Without one, streamlit-option-menu's internal
+        # key is derived partly from `default_index` - which itself changes
+        # every time the page changes - so the component effectively looks like
+        # a brand-new widget on every navigation and "forgets" the click,
+        # producing the double-tap lag. Pairing a fixed key with an immediate
+        # st.rerun() the moment the selection changes (rather than quietly
+        # writing to session_state and waiting for the *next* interaction to
+        # pick it up) makes navigation register on the very first click.
+        selected = option_menu(
+            menu_title=None,
+            options=NAV_OPTIONS,
+            icons=NAV_ICONS,
+            default_index=NAV_OPTIONS.index(st.session_state["page"]),
+            key="main_nav",
+            styles={
+                "container": {"padding": "0", "background-color": "transparent"},
+                "icon": {"color": "#7C5CFF", "font-size": "16px"},
+                "nav-link": {"font-size": "14px", "text-align": "left", "margin": "2px 0", "border-radius": "10px"},
+                "nav-link-selected": {"background": "linear-gradient(120deg, #7C5CFF, #22D3B0)", "color": "white"},
+            },
+        )
+        if selected != st.session_state["page"]:
+            st.session_state["page"] = selected
+            st.rerun()
 
     st.markdown("---")
     dark = st.toggle("🌙 Dark Mode", value=st.session_state["dark_mode"])
