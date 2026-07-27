@@ -33,6 +33,21 @@ Right-aligned dates require either a table or a right tab stop - a
 single-row, borderless 2-column table (PDF) and a right tab stop (DOCX,
 no table at all) are used for exactly that purpose. Everything else keeps
 the original single-column, bullet-based, no-table layout.
+
+Template-aware rendering (additive)
+-------------------------------------
+build_resume_pdf()/build_resume_docx() now ALSO read
+`backend.resume_templates.get_template(profile.template_id)` to vary
+header style (plain/banner/centered-rule/sidebar-bar), fonts, heading
+case, divider style, and pill-style skills - plus `profile.accent_color`,
+`profile.target_role`, `profile.summary`, and `profile.one_page`. All of
+this is read via getattr(profile, "...", default), so this module keeps
+working unmodified even if it's ever pointed at an older ResumeProfile
+that predates these fields. Both functions gained a new keyword-only
+`photo_bytes: bytes | None = None` argument (default None) - every
+existing call site (`build_resume_pdf(profile)`) is unaffected; only
+callers that opt in by passing photo_bytes=... see the photo embedded,
+and only when profile.show_photo is also true.
 """
 
 from __future__ import annotations
@@ -44,14 +59,20 @@ from dataclasses import dataclass
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_LEFT, TA_RIGHT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+from reportlab.lib import colors as rl_colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, HRFlowable,
+)
 
 from docx import Document
-from docx.shared import Pt, Inches, Emu
-from docx.enum.text import WD_TAB_ALIGNMENT
+from docx.shared import Pt, Inches, Emu, RGBColor
+from docx.enum.text import WD_TAB_ALIGNMENT, WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 from backend.resume_store import ResumeProfile
+from backend.resume_templates import get_template
 from backend.logger_setup import get_logger
 
 logger = get_logger(__name__)
@@ -74,8 +95,15 @@ def _contact_line(profile: ResumeProfile) -> str:
     return profile.email.strip() if profile.email else ""
 
 
+def _hex(color: str | None, fallback: str = "#2563EB") -> str:
+    color = (color or "").strip()
+    if not re.match(r"^#[0-9A-Fa-f]{6}$", color):
+        return fallback
+    return color
+
+
 # ------------------------------------------------------------------
-# Education parsing (free text -> structured blocks)
+# Education parsing (free text -> structured blocks) - unchanged
 # ------------------------------------------------------------------
 # Anchor line: contains a 4-digit year, optionally followed by 2+ spaces
 # and a location (e.g. "2025 – 2029          Gurugram, Haryana, India",
@@ -160,7 +188,8 @@ def _parse_education_blocks(education_text: str) -> list[_EducationBlock]:
 # ------------------------------------------------------------------
 # PDF (reportlab)
 # ------------------------------------------------------------------
-def _add_education_pdf(story: list, blocks: list[_EducationBlock], heading_style, content_width: float) -> None:
+def _add_education_pdf(story: list, blocks: list[_EducationBlock], heading_style, content_width: float,
+                        gap: float = 6) -> None:
     title_style = ParagraphStyle("EduTitle", fontName="Helvetica-Bold", fontSize=10, leading=14, alignment=TA_LEFT)
     year_style = ParagraphStyle("EduYear", fontName="Helvetica", fontSize=10, leading=14, alignment=TA_RIGHT)
     inst_style = ParagraphStyle("EduInst", fontName="Helvetica", fontSize=10, leading=14, alignment=TA_LEFT)
@@ -197,14 +226,24 @@ def _add_education_pdf(story: list, blocks: list[_EducationBlock], heading_style
             story.append(Paragraph(f"Grade: {b.grade}", grade_style))
 
         if idx < len(blocks) - 1:
-            story.append(Spacer(1, 6))
+            story.append(Spacer(1, gap))
 
 
-def build_resume_pdf(profile: ResumeProfile) -> bytes:
-    """Generate an ATS-friendly, single-column PDF resume.
+def build_resume_pdf(
+    profile: ResumeProfile,
+    *,
+    template_id: str | None = None,
+    accent_color: str | None = None,
+    photo_bytes: bytes | None = None,
+) -> bytes:
+    """Generate an ATS-friendly PDF resume, styled per the selected template.
 
     Args:
         profile: The ResumeProfile to render.
+        template_id: Overrides profile.template_id if given.
+        accent_color: Overrides profile.accent_color if given (hex, e.g. "#2563EB").
+        photo_bytes: Optional headshot image bytes, embedded only if
+            profile.show_photo is True.
 
     Returns:
         The generated PDF file's raw bytes.
@@ -214,50 +253,140 @@ def build_resume_pdf(profile: ResumeProfile) -> bytes:
     """
     _validate_profile(profile)
 
+    template = get_template(template_id or getattr(profile, "template_id", None))
+    style = template.style
+    accent_hex = _hex(accent_color or getattr(profile, "accent_color", None))
+    accent = rl_colors.HexColor(accent_hex)
+    ink = rl_colors.HexColor("#1a1a1a")
+    muted = rl_colors.HexColor("#4b5563")
+    one_page = getattr(profile, "one_page", True)
+    if one_page is None:
+        one_page = True
+
+    sp_before = 8 if one_page else 12
+    sp_after = 3 if one_page else 5
+    edu_gap = 5 if one_page else 8
+    top_margin = 0.5 if one_page else 0.65
+
     try:
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer, pagesize=LETTER,
-            topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+            topMargin=top_margin * inch, bottomMargin=0.6 * inch,
             leftMargin=0.7 * inch, rightMargin=0.7 * inch,
             title=f"{profile.full_name} - Resume",
         )
         styles = getSampleStyleSheet()
+
+        name_align = TA_CENTER if style.name_align == "center" else TA_LEFT
+        header_is_banner = style.header_style == "banner"
+        name_color = rl_colors.white if header_is_banner else (accent if style.header_style == "sidebar-bar" else ink)
+
         name_style = ParagraphStyle(
-            "NameStyle", parent=styles["Title"], fontName="Helvetica-Bold",
-            fontSize=18, alignment=TA_LEFT, spaceAfter=2,
+            "NameStyle", parent=styles["Title"], fontName=style.heading_font,
+            fontSize=18, alignment=name_align, spaceAfter=2, textColor=name_color,
+        )
+        tagline_style = ParagraphStyle(
+            "TaglineStyle", parent=styles["Normal"], fontName=style.body_font, fontSize=10.5,
+            alignment=name_align,
+            textColor=(rl_colors.HexColor("#e5e7eb") if header_is_banner else accent), spaceAfter=2,
         )
         contact_style = ParagraphStyle(
-            "ContactStyle", parent=styles["Normal"], fontSize=9.5,
-            textColor="#333333", spaceAfter=10,
+            "ContactStyle", parent=styles["Normal"], fontName=style.body_font, fontSize=9.5,
+            alignment=name_align,
+            textColor=(rl_colors.HexColor("#f3f4f6") if header_is_banner else muted), spaceAfter=10,
         )
         heading_style = ParagraphStyle(
-            "SectionHeading", parent=styles["Heading2"], fontName="Helvetica-Bold",
-            fontSize=11.5, spaceBefore=10, spaceAfter=4, textColor="#1a1a1a",
+            "SectionHeading", parent=styles["Heading2"], fontName=style.heading_font,
+            fontSize=11.5, spaceBefore=sp_before, spaceAfter=4,
+            textColor=(accent if style.header_style in ("banner", "sidebar-bar") else ink),
         )
         body_style = ParagraphStyle(
-            "Body", parent=styles["Normal"], fontSize=10, leading=14, spaceAfter=3,
+            "Body", parent=styles["Normal"], fontName=style.body_font, fontSize=10, leading=14, spaceAfter=sp_after,
         )
         bullet_style = ParagraphStyle(
             "Bullet", parent=body_style, leftIndent=12, bulletIndent=0,
         )
+        summary_style = ParagraphStyle(
+            "Summary", parent=body_style, fontName=style.body_font, spaceAfter=sp_after,
+        )
+        skills_style = ParagraphStyle("Skills", parent=body_style, textColor=ink)
 
-        story = [
-            Paragraph(profile.full_name or "Your Name", name_style),
-        ]
+        name_text = profile.full_name or "Your Name"
+        tagline_text = (getattr(profile, "target_role", "") or "").strip()
         contact = _contact_line(profile)
-        if contact:
-            story.append(Paragraph(contact, contact_style))
+
+        header_flowables: list = [Paragraph(name_text, name_style)]
+        if tagline_text:
+            header_flowables.append(Paragraph(tagline_text, tagline_style))
+        header_flowables.append(Paragraph(contact, contact_style) if contact else Spacer(1, 6))
+
+        photo_flowable = None
+        if getattr(profile, "show_photo", False) and photo_bytes:
+            try:
+                photo_flowable = Image(io.BytesIO(photo_bytes), width=0.85 * inch, height=0.85 * inch)
+            except Exception:  # noqa: BLE001 - a bad image should never break resume generation
+                photo_flowable = None
+
+        story: list = []
+
+        if style.header_style == "sidebar-bar":
+            story.append(HRFlowable(width="100%", thickness=4, color=accent, spaceAfter=8, lineCap="round"))
+
+        if photo_flowable is not None:
+            header_table = Table(
+                [[header_flowables, photo_flowable]],
+                colWidths=[doc.width - 1.0 * inch, 1.0 * inch],
+            )
+            header_table.setStyle(TableStyle([
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+            ]))
+            header_content = header_table
         else:
-            story.append(Spacer(1, 6))
+            header_content = header_flowables
+
+        if header_is_banner:
+            banner_table = Table([[header_content]], colWidths=[doc.width])
+            banner_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), accent),
+                ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, -1), 12),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+            ]))
+            story.append(banner_table)
+            story.append(Spacer(1, 10))
+        else:
+            if isinstance(header_content, list):
+                story.extend(header_content)
+            else:
+                story.append(header_content)
+            if style.header_style == "centered-rule":
+                story.append(Spacer(1, 4))
+                story.append(HRFlowable(width="100%", thickness=1.4, color=accent, spaceAfter=2))
+                story.append(HRFlowable(width="100%", thickness=0.5, color=ink, spaceAfter=8))
 
         def add_heading(text: str) -> None:
-            story.append(Paragraph(text.upper(), heading_style))
+            label = text.upper() if style.uppercase_headings else text
+            story.append(Paragraph(label, heading_style))
+            if style.divider:
+                story.append(HRFlowable(width="100%", thickness=0.6,
+                                         color=rl_colors.HexColor("#d1d5db"), spaceAfter=4))
+
+        summary_text = (getattr(profile, "summary", "") or "").strip()
+        if summary_text:
+            add_heading("Professional Summary")
+            story.append(Paragraph(summary_text, summary_style))
 
         if profile.education:
             education_blocks = _parse_education_blocks(profile.education)
             if education_blocks:
-                _add_education_pdf(story, education_blocks, heading_style, doc.width)
+                _add_education_pdf(story, education_blocks, heading_style, doc.width, edu_gap)
             else:
                 add_heading("Education")
                 for line in profile.education.splitlines():
@@ -266,7 +395,13 @@ def build_resume_pdf(profile: ResumeProfile) -> bytes:
 
         if profile.skills:
             add_heading("Skills")
-            story.append(Paragraph(", ".join(profile.skills), body_style))
+            if style.pill_skills:
+                skills_html = "&nbsp;&nbsp;".join(
+                    f'<font color="{accent_hex}">\u25CF</font> {s}' for s in profile.skills
+                )
+                story.append(Paragraph(skills_html, skills_style))
+            else:
+                story.append(Paragraph(", ".join(profile.skills), body_style))
 
         if profile.internships:
             add_heading("Internship Experience")
@@ -322,6 +457,29 @@ def build_resume_pdf(profile: ResumeProfile) -> bytes:
 # ------------------------------------------------------------------
 # DOCX (python-docx)
 # ------------------------------------------------------------------
+def _set_paragraph_shading(paragraph, hex_color: str) -> None:
+    """Apply a solid background shade to a paragraph (used for banner headers)."""
+    pPr = paragraph._p.get_or_add_pPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color.lstrip("#"))
+    pPr.append(shd)
+
+
+def _set_paragraph_border(paragraph, hex_color: str, size: int = 6, position: str = "bottom") -> None:
+    """Add a single bottom (or top) border rule under a paragraph."""
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    edge = OxmlElement(f"w:{position}")
+    edge.set(qn("w:val"), "single")
+    edge.set(qn("w:sz"), str(size))
+    edge.set(qn("w:space"), "4")
+    edge.set(qn("w:color"), hex_color.lstrip("#"))
+    pBdr.append(edge)
+    pPr.append(pBdr)
+
+
 def _add_education_docx(doc: Document, blocks: list[_EducationBlock], add_heading) -> None:
     section = doc.sections[0]
     usable_width_in = Emu(
@@ -363,52 +521,124 @@ def _add_education_docx(doc: Document, blocks: list[_EducationBlock], add_headin
             spacer.paragraph_format.space_after = Pt(2)
 
 
-def build_resume_docx(profile: ResumeProfile) -> bytes:
-    """Generate an ATS-friendly, single-column DOCX resume.
+def build_resume_docx(
+    profile: ResumeProfile,
+    *,
+    template_id: str | None = None,
+    accent_color: str | None = None,
+    photo_bytes: bytes | None = None,
+) -> bytes:
+    """Generate an ATS-friendly DOCX resume, styled per the selected template.
 
-    Args:
-        profile: The ResumeProfile to render.
-
-    Returns:
-        The generated DOCX file's raw bytes.
+    Args mirror build_resume_pdf(). Returns raw DOCX bytes.
 
     Raises:
         ResumeGenerationError: if `profile` is invalid or DOCX rendering fails.
     """
     _validate_profile(profile)
 
+    template = get_template(template_id or getattr(profile, "template_id", None))
+    style = template.style
+    accent_hex = _hex(accent_color or getattr(profile, "accent_color", None)).lstrip("#")
+    accent_rgb = RGBColor(int(accent_hex[0:2], 16), int(accent_hex[2:4], 16), int(accent_hex[4:6], 16))
+    one_page = getattr(profile, "one_page", True)
+    if one_page is None:
+        one_page = True
+    heading_space_before = Pt(8 if one_page else 12)
+
     try:
         doc = Document()
 
-        style = doc.styles["Normal"]
-        style.font.name = "Calibri"
-        style.font.size = Pt(10.5)
+        base_style = doc.styles["Normal"]
+        base_style.font.name = style.docx_font
+        base_style.font.size = Pt(10.5 if one_page else 11)
 
         for section in doc.sections:
-            section.top_margin = section.bottom_margin = Pt(36)
+            section.top_margin = section.bottom_margin = Pt(32 if one_page else 40)
             section.left_margin = section.right_margin = Pt(50)
 
+        align_center = style.name_align == "center"
+        header_is_banner = style.header_style == "banner"
+
+        if style.header_style == "sidebar-bar":
+            bar_p = doc.add_paragraph()
+            _set_paragraph_shading(bar_p, accent_hex)
+            bar_p.paragraph_format.space_after = Pt(2)
+            run = bar_p.add_run(" ")
+            run.font.size = Pt(2)
+
         name_p = doc.add_paragraph()
+        if align_center:
+            name_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if header_is_banner:
+            _set_paragraph_shading(name_p, accent_hex)
+            name_p.paragraph_format.space_before = Pt(10)
         name_run = name_p.add_run(profile.full_name or "Your Name")
         name_run.bold = True
         name_run.font.size = Pt(18)
+        name_run.font.name = style.docx_font
+        if header_is_banner:
+            name_run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        elif style.header_style == "sidebar-bar":
+            name_run.font.color.rgb = accent_rgb
+
+        tagline_text = (getattr(profile, "target_role", "") or "").strip()
+        if tagline_text:
+            tagline_p = doc.add_paragraph()
+            if align_center:
+                tagline_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if header_is_banner:
+                _set_paragraph_shading(tagline_p, accent_hex)
+            tagline_run = tagline_p.add_run(tagline_text)
+            tagline_run.font.size = Pt(11)
+            tagline_run.font.color.rgb = (RGBColor(0xF3, 0xF4, 0xF6) if header_is_banner else accent_rgb)
 
         contact = _contact_line(profile)
+        contact_p = doc.add_paragraph()
+        if align_center:
+            contact_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if header_is_banner:
+            _set_paragraph_shading(contact_p, accent_hex)
+            contact_p.paragraph_format.space_after = Pt(10)
         if contact:
-            contact_p = doc.add_paragraph(contact)
-            if contact_p.runs:
-                contact_p.runs[0].font.size = Pt(9.5)
+            contact_run = contact_p.add_run(contact)
+            contact_run.font.size = Pt(9.5)
+            if header_is_banner:
+                contact_run.font.color.rgb = RGBColor(0xF3, 0xF4, 0xF6)
+
+        if getattr(profile, "show_photo", False) and photo_bytes:
+            try:
+                doc.add_picture(io.BytesIO(photo_bytes), width=Inches(0.9))
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not header_is_banner:
+            rule_p = doc.add_paragraph()
+            _set_paragraph_border(rule_p, accent_hex if style.header_style == "centered-rule" else "D1D5DB",
+                                   size=(10 if style.header_style == "centered-rule" else 6))
+            rule_p.paragraph_format.space_after = Pt(6)
 
         def add_heading(text: str) -> None:
+            label = text.upper() if style.uppercase_headings else text
             h = doc.add_paragraph()
-            run = h.add_run(text.upper())
+            run = h.add_run(label)
             run.bold = True
             run.font.size = Pt(12)
-            h.paragraph_format.space_before = Pt(10)
+            run.font.name = style.docx_font
+            if style.header_style in ("banner", "sidebar-bar"):
+                run.font.color.rgb = accent_rgb
+            h.paragraph_format.space_before = heading_space_before
             h.paragraph_format.space_after = Pt(2)
+            if style.divider:
+                _set_paragraph_border(h, "D1D5DB", size=4)
 
         def add_bullet(text: str) -> None:
             doc.add_paragraph(f"- {text}")
+
+        summary_text = (getattr(profile, "summary", "") or "").strip()
+        if summary_text:
+            add_heading("Professional Summary")
+            doc.add_paragraph(summary_text)
 
         if profile.education:
             education_blocks = _parse_education_blocks(profile.education)
@@ -422,7 +652,16 @@ def build_resume_docx(profile: ResumeProfile) -> bytes:
 
         if profile.skills:
             add_heading("Skills")
-            doc.add_paragraph(", ".join(profile.skills))
+            if style.pill_skills:
+                p = doc.add_paragraph()
+                for idx, skill in enumerate(profile.skills):
+                    if idx > 0:
+                        p.add_run("    ")
+                    dot = p.add_run("\u25CF ")
+                    dot.font.color.rgb = accent_rgb
+                    p.add_run(skill)
+            else:
+                doc.add_paragraph(", ".join(profile.skills))
 
         if profile.internships:
             add_heading("Internship Experience")
