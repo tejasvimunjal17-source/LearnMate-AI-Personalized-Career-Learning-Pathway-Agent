@@ -25,9 +25,10 @@ from frontend.admin_database_page import render_admin_database_page
 from frontend.admin_users_page import render_admin_users_page
 from frontend.admin_feedback_page import render_admin_feedback_page
 from frontend.admin_notifications_page import render_admin_notifications_page
+from frontend.admin_broadcast_page import render_admin_broadcast_page
 
-ADMIN_NAV_OPTIONS = ["Dashboard", "Database", "Users", "Feedback", "Announcements"]
-ADMIN_NAV_ICONS = ["speedometer2", "database", "people", "chat-left-text", "megaphone"]
+ADMIN_NAV_OPTIONS = ["Dashboard", "Database", "Users", "Feedback", "Announcements", "Notifications"]
+ADMIN_NAV_ICONS = ["speedometer2", "database", "people", "chat-left-text", "megaphone", "bell"]
 
 ADMIN_ROUTES = {
     "Dashboard": render_admin_dashboard_page,
@@ -35,6 +36,7 @@ ADMIN_ROUTES = {
     "Users": render_admin_users_page,
     "Feedback": render_admin_feedback_page,
     "Announcements": render_admin_notifications_page,
+    "Notifications": render_admin_broadcast_page,
 }
 
 
