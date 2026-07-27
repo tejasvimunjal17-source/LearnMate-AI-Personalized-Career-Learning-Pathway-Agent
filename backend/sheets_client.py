@@ -1,6 +1,17 @@
 """
 backend/sheets_client.py
 -------------------------
+⚠️ DEPRECATED / UNUSED AS OF PHASE 4 — kept only for backward-compat
+reference (per project instructions: retain unless completely unused —
+this module now IS completely unused, but is left in place rather than
+deleted). Nothing in the codebase imports this module anymore; every
+caller (backend/auth.py, backend/resume_review.py, backend/responses_store.py,
+backend/resume_store.py) was migrated to backend/supabase_client.py (Phase 2)
+or backend/resume_details.py (Phase 4). Do not wire this back in — the
+Google Sheets + local CSV fallback described below is exactly what Phase 4
+explicitly removed from the runtime. gspread/google-auth were also removed
+from requirements.txt, so this module will fail to import if you try.
+
 Thin, defensive data-access layer that stores LearnMate AI's two datasets —
 user registrations and roadmap-form responses — in Google Sheets.
 
