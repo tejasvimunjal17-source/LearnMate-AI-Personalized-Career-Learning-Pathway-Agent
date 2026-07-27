@@ -16,7 +16,7 @@ from __future__ import annotations
 import streamlit as st
 from streamlit_option_menu import option_menu
 
-from config import CONFIG, SHEETS_CONFIG
+from config import CONFIG
 from agent_instructions import DOMAIN_SPECIALIZATION
 from backend.logger_setup import get_logger
 from backend.roadmap_engine import StudentProfile, generate_roadmap
@@ -25,7 +25,8 @@ from backend.pdf_report import build_pdf_report
 from backend.docx_report import build_docx_report
 from backend.recommendations import get_courses_for_domain, get_certifications_for_domain
 from backend.responses_store import save_response
-from backend.sheets_client import is_sheets_backend_active
+from backend.roadmap_store import save_generated_roadmap
+from backend.activity_logger import log_activity, log_logout
 from utils.validators import validate_profile
 
 from frontend.styles import inject_css
@@ -38,12 +39,18 @@ from frontend.free_courses_page import render_free_courses_page
 from frontend.resume_builder import render_resume_builder_page
 from frontend.resume_review_page import render_resume_review_page
 from frontend.job_search_page import render_job_search_page
+from frontend.feedback_page import render_feedback_page
+from frontend.notification_center import render_notification_bell_and_panel
 from backend.openrouter_client import generate_chat_response
 from frontend.components import (
     hero, metric_card, glass_card_open, glass_card_close, progress_bar,
     milestone_node, skill_gap_row, empty_state, course_card, cert_card,
 )
 from frontend.charts import readiness_gauge, skill_gap_bar, weekly_effort_line, progress_donut
+from frontend.admin_panel import render_admin_panel
+from backend.admin_data import get_active_announcements, AdminDataError
+from backend.supabase_client import _get_client, SupabaseUnavailableError, is_supabase_backend_active
+import plotly.graph_objects as go
 
 logger = get_logger(__name__)
 
@@ -76,11 +83,29 @@ DEFAULTS = {
     "landing_view": "home",     # "home" | "register" | "app"
     "chatbot_open": False,
     "chat_history": [],
+    "admin_user": None,          # separate from auth_user - {id, email, first_name, last_name, is_super_admin}
+    "login_log_id": None,        # login_logs row id for the current session, stamped with logout_time on logout
+    "admin_page": "Dashboard",
+    "force_admin_mode": False,
 }
 for key, value in DEFAULTS.items():
     st.session_state.setdefault(key, value)
 
 inject_css(dark_mode=st.session_state["dark_mode"])
+
+# ------------------------------------------------------------------------
+# ADMIN PANEL ENTRY POINT
+# Completely independent of the regular auth_user session/flow below, so
+# an admin can reach the Admin Login without ever registering as a regular
+# user (e.g. by visiting the app URL with ?admin=1), and a regular user's
+# session is never treated as admin access. Reached either via the URL
+# query param, or via the "Admin Panel" button rendered in the regular
+# authenticated sidebar further down.
+# ------------------------------------------------------------------------
+ADMIN_MODE = st.query_params.get("admin") == "1" or st.session_state.get("force_admin_mode") or st.session_state.get("admin_user") is not None
+if ADMIN_MODE:
+    render_admin_panel()
+    st.stop()
 
 AUTHENTICATED = st.session_state["auth_user"] is not None
 
@@ -114,6 +139,15 @@ if not AUTHENTICATED:
 render_topnav(authenticated=True)
 render_custom_sidebar_controls()
 
+if not st.session_state.get("_announcements_shown_this_session"):
+    try:
+        active_announcements = get_active_announcements()
+    except AdminDataError:
+        active_announcements = []
+    for ann in active_announcements[:3]:
+        st.info(f"📣 **{ann.get('title', '')}** — {ann.get('body', '')}")
+    st.session_state["_announcements_shown_this_session"] = True
+
 with st.sidebar:
     user = st.session_state["auth_user"]
     st.markdown(
@@ -122,13 +156,17 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.markdown("---")
+    render_notification_bell_and_panel()
+    st.markdown("---")
 
     NAV_OPTIONS = ["Home", "My Profile", "Career Profile", "AI Roadmap", "Skill Gap",
                    "Courses & Certs", "Progress Tracker", "Dashboard",
-                   "📚 Free Courses", "📄 Resume Builder", "📊 Resume Review", "💼 Job Search"]
+                   "📚 Free Courses", "📄 Resume Builder", "📊 Resume Review", "💼 Job Search",
+                   "💬 Feedback"]
     NAV_ICONS = ["house", "person-badge", "person-lines-fill", "signpost-split",
                  "bar-chart-steps", "mortarboard", "check2-square", "grid-1x2",
-                 "book", "file-earmark-person", "clipboard-data", "briefcase"]
+                 "book", "file-earmark-person", "clipboard-data", "briefcase",
+                 "chat-left-text"]
 
     if st.session_state["page"] not in NAV_OPTIONS:
         st.session_state["page"] = "Career Profile"
@@ -174,14 +212,21 @@ with st.sidebar:
             "Add WATSONX_API_KEY, WATSONX_PROJECT_ID, WATSONX_URL and "
             "WATSONX_MODEL_ID to your .env to enable live AI generation."
         )
-    sheets_label = "🟢 Google Sheets connected" if SHEETS_CONFIG.is_configured else "🟡 Local storage fallback"
-    st.caption(sheets_label)
+    supabase_label = "🟢 Supabase connected" if is_supabase_backend_active() else "🔴 Supabase unreachable"
+    st.caption(supabase_label)
 
     if st.button("🚪 Logout", key="sidebar_logout", use_container_width=True):
-        for k in ["auth_user", "profile", "roadmap", "completed_weeks", "completed_courses", "completed_certs"]:
+        log_activity(st.session_state["auth_user"]["email"], "logout")
+        log_logout(st.session_state.get("login_log_id"))
+        for k in ["auth_user", "profile", "roadmap", "completed_weeks", "completed_courses", "completed_certs", "login_log_id"]:
             st.session_state[k] = DEFAULTS[k] if k in DEFAULTS else None
         st.session_state["landing_view"] = "home"
         st.session_state["page"] = "Career Profile"
+        st.rerun()
+
+    st.markdown("---")
+    if st.button("🛡️ Admin Panel", key="sidebar_admin_entry", use_container_width=True):
+        st.session_state["force_admin_mode"] = True
         st.rerun()
 
 
@@ -262,6 +307,8 @@ def render_profile_form_page() -> None:
                 return
 
         save_response(st.session_state["auth_user"]["email"], profile)
+        save_generated_roadmap(st.session_state["auth_user"]["email"], profile, roadmap)
+        log_activity(st.session_state["auth_user"]["email"], "ai_roadmap_generation")
 
         st.success(f"✅ Roadmap generated for **{profile.name}**! Open **AI Roadmap** from the sidebar.")
         st.balloons()
@@ -463,10 +510,151 @@ def render_progress_page() -> None:
     st.session_state["completed_weeks"] = completed
 
 
+def _fetch_user_supabase_analytics(email: str) -> dict | None:
+    """Pull this user's real cross-session stats straight from Supabase.
+    Returns None if Supabase can't be reached or the user isn't found -
+    callers show an honest message rather than fabricated numbers."""
+    try:
+        client = _get_client()
+        user_resp = client.table("users").select("id").eq("email", email.strip().lower()).limit(1).execute()
+        user_rows = user_resp.data or []
+        if not user_rows:
+            return None
+        user_id = user_rows[0]["id"]
+
+        roadmaps_resp = (
+            client.table("roadmaps")
+            .select("certifications, projects, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        roadmap_rows = roadmaps_resp.data or []
+
+        ai_count_resp = client.table("ai_responses").select("id", count="exact").eq("user_id", user_id).execute()
+        resume_count_resp = client.table("resume_details").select("id", count="exact").eq("user_id", user_id).execute()
+
+        latest_hours_resp = (
+            client.table("roadmap_requests")
+            .select("study_hours_per_week")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        latest_hours_rows = latest_hours_resp.data or []
+
+        certs: set[str] = set()
+        projects_count = 0
+        for r in roadmap_rows:
+            certs.update(r.get("certifications") or [])
+            projects_count += len(r.get("projects") or [])
+
+        return {
+            "total_roadmaps": len(roadmap_rows),
+            "total_ai_requests": ai_count_resp.count or 0,
+            "resume_count": resume_count_resp.count or 0,
+            "weekly_study_hours": latest_hours_rows[0]["study_hours_per_week"] if latest_hours_rows else None,
+            "certifications_referenced": len(certs),
+            "projects_referenced": projects_count,
+            "roadmap_dates": [r.get("created_at", "")[:10] for r in roadmap_rows if r.get("created_at")],
+        }
+    except SupabaseUnavailableError:
+        return None
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to load Supabase dashboard analytics for %s", email)
+        return None
+
+
+def _render_supabase_analytics_section() -> None:
+    """Real, cross-session analytics for the logged-in user, sourced
+    entirely from Supabase. Distinct from the session-only charts below
+    (roadmap progress / certs-checked-off), which only reflect the
+    current browser session since that data isn't persisted anywhere."""
+    email = st.session_state["auth_user"]["email"]
+    stats = _fetch_user_supabase_analytics(email)
+
+    hero("Your Activity", "📊 Career Journey Analytics", "Real totals from your LearnMate AI account history.")
+
+    if stats is None:
+        empty_state("📊", "Your Supabase analytics aren't available right now — please try again shortly.")
+        return
+
+    m1, m2, m3, m4 = st.columns(4)
+    metric_card("Total Roadmaps", str(stats["total_roadmaps"]), m1)
+    metric_card("Total AI Requests", str(stats["total_ai_requests"]), m2)
+    metric_card("Resume Count", str(stats["resume_count"]), m3)
+    metric_card(
+        "Weekly Study Hours",
+        f"{stats['weekly_study_hours']} hrs" if stats["weekly_study_hours"] is not None else "—",
+        m4,
+    )
+
+    st.caption(
+        "Certifications and courses **completed** are tracked per-session (see below) — "
+        "they aren't persisted to Supabase yet. The figures below are counts referenced "
+        "across all your generated roadmaps, which ARE stored."
+    )
+    m5, m6 = st.columns(2)
+    metric_card("Certifications Referenced", str(stats["certifications_referenced"]), m5)
+    metric_card("Projects Referenced", str(stats["projects_referenced"]), m6)
+
+    dark = st.session_state["dark_mode"]
+    text_color = "#EDEEFB" if dark else "#1B1E33"
+    grid_color = "rgba(255,255,255,0.08)" if dark else "rgba(15,18,41,0.08)"
+    base_layout = dict(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif", color=text_color),
+        margin=dict(l=10, r=10, t=48, b=10), height=300,
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        fig = go.Figure(
+            go.Bar(
+                x=["Roadmaps", "Resumes", "AI Requests"],
+                y=[stats["total_roadmaps"], stats["resume_count"], stats["total_ai_requests"]],
+                marker_color=["#7C5CFF", "#22D3B0", "#FF6B81"],
+            )
+        )
+        fig.update_layout(
+            title=dict(text="Activity Overview", font=dict(family="Space Grotesk, sans-serif", size=16, color=text_color)),
+            xaxis=dict(gridcolor=grid_color), yaxis=dict(gridcolor=grid_color),
+            **base_layout,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        dates = stats["roadmap_dates"]
+        if dates:
+            counts_by_date: dict[str, int] = {}
+            for d in sorted(dates):
+                counts_by_date[d] = counts_by_date.get(d, 0) + 1
+            fig2 = go.Figure(
+                go.Scatter(
+                    x=list(counts_by_date.keys()), y=list(counts_by_date.values()),
+                    mode="lines+markers", line=dict(color="#7C5CFF", width=3),
+                    marker=dict(color="#22D3B0", size=7),
+                    fill="tozeroy", fillcolor="rgba(124,92,255,0.12)",
+                )
+            )
+            fig2.update_layout(
+                title=dict(text="Roadmaps Generated Over Time", font=dict(family="Space Grotesk, sans-serif", size=16, color=text_color)),
+                xaxis=dict(gridcolor=grid_color), yaxis=dict(gridcolor=grid_color, dtick=1),
+                **base_layout,
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            empty_state("🧭", "No roadmaps generated yet — this chart will fill in once you do.")
+
+    st.markdown("---")
+
+
 # ----------------------------------------------------------------------
 # PAGE: Dashboard
 # ----------------------------------------------------------------------
 def render_dashboard_page() -> None:
+    _render_supabase_analytics_section()
+
     roadmap = st.session_state["roadmap"]
     profile = st.session_state["profile"]
     if not roadmap or not profile:
@@ -528,6 +716,7 @@ PAGES = {
     "📄 Resume Builder": render_resume_builder_page,
     "📊 Resume Review": render_resume_review_page,
     "💼 Job Search": render_job_search_page,
+    "💬 Feedback": render_feedback_page,
 }
 
 try:
