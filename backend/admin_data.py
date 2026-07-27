@@ -346,3 +346,38 @@ def delete_announcement(announcement_id: str) -> None:
     client = _get_client()
     client.table("announcements").delete().eq("id", announcement_id).execute()
     logger.info("Announcement %s deleted by admin", announcement_id)
+
+
+# ---------------------------------------------------------------------------
+# Feedback replies (Phase 4, Part 1) — a feedback item can have a full
+# reply thread, stored in the separate `feedback_replies` table (see
+# sql/008_feedback_replies.sql) rather than a single column on `feedback`.
+# ---------------------------------------------------------------------------
+def add_admin_reply(feedback_id: str, admin_id: str, reply_text: str) -> None:
+    if not reply_text or not reply_text.strip():
+        raise AdminDataError("Reply text cannot be empty.")
+    client = _get_client()
+    try:
+        client.table("feedback_replies").insert(
+            {"feedback_id": feedback_id, "admin_id": admin_id, "reply_text": reply_text.strip()}
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to save reply for feedback %s", feedback_id)
+        raise AdminDataError(f"Could not save reply: {exc}") from exc
+    logger.info("Admin reply added to feedback %s", feedback_id)
+
+
+def get_feedback_replies(feedback_id: str) -> list[dict[str, Any]]:
+    client = _get_client()
+    try:
+        resp = (
+            client.table("feedback_replies")
+            .select("*, admin_users(email, first_name, last_name)")
+            .eq("feedback_id", feedback_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to load replies for feedback %s", feedback_id)
+        raise AdminDataError(f"Could not load reply history: {exc}") from exc
