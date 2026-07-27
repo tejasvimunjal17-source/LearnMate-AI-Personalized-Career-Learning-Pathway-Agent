@@ -30,12 +30,17 @@ three function names and signatures, but internally:
 This keeps 100% of the translation logic in ONE place, so the four
 calling modules required only a one-line import change.
 
-Fallback behavior: if SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY aren't
-configured (e.g. local dev without secrets set up yet), this module logs
-a clear warning and falls back to local JSON storage under ./data/, using
-the *same* sheet-shaped row dicts the callers already use — so the app
-keeps working end-to-end in offline/demo mode, exactly as it did with the
-old Google Sheets CSV fallback.
+Runtime behavior (Phase 4): there is NO local JSON/CSV fallback here
+anymore. If SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY aren't configured
+or Supabase can't be reached, every function raises SupabaseUnavailableError
+immediately. Earlier phases fell back to local JSON storage so the app
+could run offline/in demos without credentials configured - that
+fallback has been intentionally removed so Supabase is unambiguously
+the only runtime data store, with no silent on-disk drift between the
+two. Callers that need "never break the user-facing flow over a
+persistence hiccup" (e.g. backend/responses_store.py logging a roadmap
+request) already wrap their calls in their own try/except - that
+resilience now lives at the call site, not hidden inside this module.
 """
 
 from __future__ import annotations
@@ -43,7 +48,6 @@ from __future__ import annotations
 import json
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from config import SHEETS_CONFIG, SUPABASE_CONFIG
@@ -51,7 +55,6 @@ from backend.logger_setup import get_logger
 
 logger = get_logger(__name__)
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "supabase_fallback"
 _lock = threading.Lock()
 _client_cache: dict[str, Any] = {}
 
@@ -334,89 +337,75 @@ _ADAPTERS: dict[str, dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
-# Local JSON fallback (mirrors the old CSV fallback, same sheet-shaped rows)
-# ---------------------------------------------------------------------------
-def _local_path(sheet_name: str) -> Path:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    safe = sheet_name.strip().lower().replace(" ", "_")
-    return _DATA_DIR / f"{safe}.json"
-
-
-def _local_read(sheet_name: str) -> list[dict[str, Any]]:
-    path = _local_path(sheet_name)
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _local_write(sheet_name: str, rows: list[dict[str, Any]]) -> None:
-    _local_path(sheet_name).write_text(json.dumps(rows, indent=2), encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
 # Public API — same names/signatures as backend/sheets_client.py
 # ---------------------------------------------------------------------------
 def append_row(sheet_name: str, header: list[str], row: dict[str, Any]) -> None:
-    """Insert one row (in the caller's original sheet-shaped dict) into Supabase."""
-    with _lock:
-        try:
-            table = _table_for(sheet_name)
-            client = _get_client()
-            adapter = _ADAPTERS[table]
-            db_row = adapter["to_db"](client, row)
-            client.table(table).insert(db_row).execute()
-            logger.info("Row inserted into Supabase table '%s'", table)
-            return
-        except SupabaseUnavailableError as exc:
-            logger.warning("Supabase unavailable (%s) — using local JSON fallback.", exc)
-        except Exception:  # noqa: BLE001
-            logger.exception("Unexpected error writing to Supabase — using local JSON fallback.")
+    """Insert one row (in the caller's original sheet-shaped dict) into Supabase.
 
-        rows = _local_read(sheet_name)
-        rows.append(row)
-        _local_write(sheet_name, rows)
+    Raises:
+        SupabaseUnavailableError: if Supabase isn't configured/reachable,
+            or the insert otherwise fails. No local fallback - callers
+            that must not let a persistence failure block the user-facing
+            flow (e.g. responses_store.save_response) catch this
+            themselves at the call site.
+    """
+    with _lock:
+        table = _table_for(sheet_name)
+        client = _get_client()
+        adapter = _ADAPTERS[table]
+        db_row = adapter["to_db"](client, row)
+        try:
+            client.table(table).insert(db_row).execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to insert into Supabase table '%s'", table)
+            raise SupabaseUnavailableError(f"Insert into '{table}' failed: {exc}") from exc
+        logger.info("Row inserted into Supabase table '%s'", table)
 
 
 def read_rows(sheet_name: str, header: list[str]) -> list[dict[str, Any]]:
-    """Read all rows from Supabase, translated back into the caller's sheet-shaped dicts."""
-    with _lock:
-        try:
-            table = _table_for(sheet_name)
-            client = _get_client()
-            adapter = _ADAPTERS[table]
-            resp = client.table(table).select(adapter["select"]).execute()
-            return [adapter["from_db"](client, r) for r in (resp.data or [])]
-        except SupabaseUnavailableError as exc:
-            logger.warning("Supabase unavailable (%s) — reading local JSON fallback.", exc)
-        except Exception:  # noqa: BLE001
-            logger.exception("Unexpected error reading Supabase — using local JSON fallback.")
+    """Read all rows from Supabase, translated back into the caller's sheet-shaped dicts.
 
-        return _local_read(sheet_name)
+    Raises:
+        SupabaseUnavailableError: if Supabase isn't configured/reachable,
+            or the read otherwise fails. No local fallback.
+    """
+    with _lock:
+        table = _table_for(sheet_name)
+        client = _get_client()
+        adapter = _ADAPTERS[table]
+        try:
+            resp = client.table(table).select(adapter["select"]).execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to read Supabase table '%s'", table)
+            raise SupabaseUnavailableError(f"Read from '{table}' failed: {exc}") from exc
+        return [adapter["from_db"](client, r) for r in (resp.data or [])]
 
 
 def update_row(sheet_name: str, header: list[str], match_col: str, match_value: str, updates: dict[str, Any]) -> bool:
-    """Update the row matching match_col == match_value. Returns True if a row was updated."""
+    """Update the row matching match_col == match_value. Returns True if a row was updated.
+
+    Raises:
+        SupabaseUnavailableError: if Supabase isn't configured/reachable,
+            or the update otherwise fails. No local fallback.
+    """
     with _lock:
+        table = _table_for(sheet_name)
+        client = _get_client()
+        adapter = _ADAPTERS[table]
+
+        # Merge the match value into `updates` so the to_db() adapter has
+        # everything it needs (e.g. resume_details updates need "email"
+        # present even if the caller didn't repeat it in `updates`).
+        merged = {**updates}
+        if match_col not in merged:
+            merged[match_col] = match_value
+        db_row = adapter["to_db"](client, merged)
+        # to_db() adapters always resolve/attach user_id; drop it from the
+        # SET clause payload only for the `users` table itself, where the
+        # match is a plain column (email), not a foreign key.
+        db_match_col = adapter["match_col_map"].get(match_col, match_col)
+
         try:
-            table = _table_for(sheet_name)
-            client = _get_client()
-            adapter = _ADAPTERS[table]
-
-            # Merge the match value into `updates` so the to_db() adapter has
-            # everything it needs (e.g. resume_details updates need "email"
-            # present even if the caller didn't repeat it in `updates`).
-            merged = {**updates}
-            if match_col not in merged:
-                merged[match_col] = match_value
-            db_row = adapter["to_db"](client, merged)
-            # to_db() adapters always resolve/attach user_id; drop it from the
-            # SET clause payload only for the `users` table itself, where the
-            # match is a plain column (email), not a foreign key.
-            db_match_col = adapter["match_col_map"].get(match_col, match_col)
-
             if db_match_col.startswith("users."):
                 # Matching via the related users table: resolve to user_id first.
                 user_id = _resolve_user_id(client, match_value)
@@ -425,24 +414,14 @@ def update_row(sheet_name: str, header: list[str], match_col: str, match_value: 
                 db_row.pop("user_id", None)
                 resp = client.table(table).update(db_row).eq("user_id", user_id).execute()
             else:
-                resp = client.table(table).update(db_row).eq(db_match_col, match_value.strip().lower()
-                                                               if db_match_col == "email" else match_value).execute()
+                resp = client.table(table).update(db_row).eq(
+                    db_match_col, match_value.strip().lower() if db_match_col == "email" else match_value
+                ).execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to update Supabase table '%s'", table)
+            raise SupabaseUnavailableError(f"Update on '{table}' failed: {exc}") from exc
 
-            updated = bool(resp.data)
-            if updated:
-                logger.info("Row(s) updated in Supabase table '%s'", table)
-            return updated
-        except SupabaseUnavailableError as exc:
-            logger.warning("Supabase unavailable (%s) — updating local JSON fallback.", exc)
-        except Exception:  # noqa: BLE001
-            logger.exception("Unexpected error updating Supabase — using local JSON fallback.")
-
-        rows = _local_read(sheet_name)
-        updated = False
-        for r in rows:
-            if r.get(match_col) == match_value:
-                r.update(updates)
-                updated = True
+        updated = bool(resp.data)
         if updated:
-            _local_write(sheet_name, rows)
+            logger.info("Row(s) updated in Supabase table '%s'", table)
         return updated
