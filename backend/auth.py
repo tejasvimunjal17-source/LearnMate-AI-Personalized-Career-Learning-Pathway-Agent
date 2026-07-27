@@ -3,9 +3,12 @@ backend/auth.py
 ------------------
 User registration, lookup, and profile-update logic for LearnMate AI.
 
-Registrations are persisted via backend.sheets_client into the
-"LearnMate AI Users Data" Google Sheet (or a local CSV fallback), with
-columns: Timestamp, First Name, Last Name, Email Address.
+Registrations are persisted via backend.supabase_client into the
+Supabase "users" table, with columns: Timestamp, First Name, Last Name,
+Email Address (translated internally to created_at/first_name/last_name/
+email). As of Phase 4 there is no local fallback: if Supabase can't be
+reached, the functions below raise RegistrationError with a clear
+message rather than silently degrading to on-disk storage.
 
 This module deliberately holds no session logic of its own — Streamlit
 session state (st.session_state["auth_user"]) is the source of truth for
@@ -20,7 +23,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
 from config import SHEETS_CONFIG
-from backend.sheets_client import append_row, read_rows, update_row
+from backend.supabase_client import append_row, read_rows, update_row, SupabaseUnavailableError
 from backend.logger_setup import get_logger
 
 logger = get_logger(__name__)
@@ -67,9 +70,19 @@ def validate_registration(first_name: str, last_name: str, email: str) -> list[s
 
 
 def find_user_by_email(email: str) -> AuthUser | None:
-    """Look up a previously-registered user by email. Returns None if not found."""
+    """Look up a previously-registered user by email. Returns None if not found.
+
+    Raises RegistrationError if Supabase can't be reached (there is no
+    local fallback to quietly fall back to as of Phase 4).
+    """
     email_norm = email.strip().lower()
-    rows = read_rows(SHEETS_CONFIG.users_sheet_name, USERS_HEADER)
+    try:
+        rows = read_rows(SHEETS_CONFIG.users_sheet_name, USERS_HEADER)
+    except SupabaseUnavailableError as exc:
+        logger.error("Could not look up user %s: %s", email_norm, exc)
+        raise RegistrationError(
+            "We couldn't reach the database right now. Please try again in a moment."
+        ) from exc
     for row in rows:
         if str(row.get("Email Address", "")).strip().lower() == email_norm:
             return AuthUser(
@@ -107,7 +120,13 @@ def register_user(first_name: str, last_name: str, email: str) -> AuthUser:
         "Last Name": last_name.strip(),
         "Email Address": email.strip().lower(),
     }
-    append_row(SHEETS_CONFIG.users_sheet_name, USERS_HEADER, row)
+    try:
+        append_row(SHEETS_CONFIG.users_sheet_name, USERS_HEADER, row)
+    except SupabaseUnavailableError as exc:
+        logger.error("Could not register user %s: %s", row["Email Address"], exc)
+        raise RegistrationError(
+            "We couldn't reach the database right now. Please try again in a moment."
+        ) from exc
     logger.info("New user registered: %s", row["Email Address"])
 
     return AuthUser(
@@ -138,13 +157,19 @@ def update_user_name(email: str, first_name: str, last_name: str) -> bool:
     if errors:
         raise RegistrationError(" ".join(errors))
 
-    updated = update_row(
-        SHEETS_CONFIG.users_sheet_name,
-        USERS_HEADER,
-        match_col="Email Address",
-        match_value=email.strip().lower(),
-        updates={"First Name": first_name.strip(), "Last Name": last_name.strip()},
-    )
+    try:
+        updated = update_row(
+            SHEETS_CONFIG.users_sheet_name,
+            USERS_HEADER,
+            match_col="Email Address",
+            match_value=email.strip().lower(),
+            updates={"First Name": first_name.strip(), "Last Name": last_name.strip()},
+        )
+    except SupabaseUnavailableError as exc:
+        logger.error("Could not update profile for %s: %s", email, exc)
+        raise RegistrationError(
+            "We couldn't reach the database right now. Please try again in a moment."
+        ) from exc
     if updated:
         logger.info("Profile updated for %s", email)
     return updated
