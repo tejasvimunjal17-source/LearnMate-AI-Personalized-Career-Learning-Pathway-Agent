@@ -8,19 +8,26 @@ add/remove card sections. Backend is untouched: Projects/Certificates/
 Internships already map 1:1 onto backend.resume_store's ProjectEntry/
 CertificateEntry/InternshipEntry dataclasses. Education has no dedicated
 dataclass in the backend (ResumeProfile.education is a single str field),
-so the structured education cards captured here (College/University vs
-School entries, each with their own fields) are formatted into a single
-well-structured multi-line string before being assigned to
-ResumeProfile.education - no backend/config changes required.
+so the structured education cards captured here are formatted into a
+single well-structured multi-line string before being assigned to
+ResumeProfile.education.
 
-Note on rendering: backend.resume_generator renders `profile.education`
-by splitting on newlines and prefixing each non-empty line with "- " as
-a bullet (it wasn't modified here per the "backend untouched" requirement).
-So the generated PDF/DOCX will show each education line as its own
-bullet rather than the exact visually-grouped block shown in the sample
-output - the *content and order* match the sample format, but not its
-custom multi-column alignment, since that would require a
-resume_generator.py change.
+Resume Settings + templates + AI toolkit
+------------------------------------------
+This adds, ABOVE Personal Details, a "Resume Settings" panel: a
+template gallery (backend.resume_templates), target role / experience
+level / accent color / one-page toggle / photo show-hide, and a Live
+Preview toggle. None of the original fields, session_state keys, or
+Save/Generate/Download buttons were renamed or removed - all of this
+is additive, using new session_state keys prefixed the same way
+(`resume_*`) as the existing ones.
+
+The AI Toolkit expander (ATS score, keyword suggestions, cover letter,
+LinkedIn About, portfolio blurb, HR email, interview questions, resume
+import/auto-fill, duplicate-skill detection, completeness meter) calls
+backend.resume_ai / backend.resume_ats, which themselves wrap the
+existing backend.openrouter_client and backend.resume_review pipelines
+- no new external services or credentials.
 """
 
 from __future__ import annotations
@@ -33,11 +40,20 @@ from backend.resume_store import (
     ResumeProfile, ProjectEntry, CertificateEntry, InternshipEntry, save_resume,
 )
 from backend.resume_generator import build_resume_pdf, build_resume_docx
+from backend.resume_templates import list_templates, get_template, ACCENT_COLORS, DEFAULT_TEMPLATE_ID
+from backend.resume_ats import check_ats_score, suggest_keywords, resume_completeness, find_duplicate_skills
+from backend.resume_ai import (
+    generate_professional_summary, improve_bullet_point, polish_grammar,
+    generate_cover_letter, generate_linkedin_about, generate_portfolio_blurb,
+    generate_hr_email, generate_interview_questions, parse_resume_text_to_fields,
+)
+from backend.resume_review import extract_text_from_pdf, extract_text_from_docx
 from frontend.components import hero, glass_card_open, glass_card_close
 
 COLLEGE_LEVEL = "College / University"
 SCHOOL_LEVEL = "School (10th / 12th)"
 SCHOOL_QUALIFICATIONS = ["Secondary Education", "Senior Secondary Education"]
+EXPERIENCE_LEVELS = ["Fresher", "Student", "Experienced"]
 
 _LIST_STATE_KEYS = ["resume_education", "resume_projects", "resume_certificates", "resume_internships"]
 
@@ -52,13 +68,10 @@ def _new_id() -> str:
 def _empty_education() -> dict:
     return {
         "_id": _new_id(), "level": COLLEGE_LEVEL,
-        # College / University fields
         "degree": "", "field_major": "", "institution": "", "university_board": "",
         "start_year": "", "end_year": "", "present": False,
-        # School fields
         "qualification": SCHOOL_QUALIFICATIONS[1], "school_name": "", "board": "",
         "passing_year": "",
-        # Shared fields
         "city": "", "state": "", "country": "", "grade": "",
     }
 
@@ -88,12 +101,33 @@ def _init_state() -> None:
         if key not in st.session_state or not st.session_state[key]:
             st.session_state[key] = [_EMPTY_FACTORIES[key]()]
     st.session_state.setdefault("resume_profile", None)
+    # Resume Settings (additive, new keys only)
+    st.session_state.setdefault("resume_template_id", DEFAULT_TEMPLATE_ID)
+    st.session_state.setdefault("resume_target_role", "")
+    st.session_state.setdefault("resume_experience_level", "Fresher")
+    st.session_state.setdefault("resume_accent_color_name", "Blue")
+    st.session_state.setdefault("resume_one_page", True)
+    st.session_state.setdefault("resume_show_photo", False)
+    st.session_state.setdefault("resume_photo_bytes", None)
+    st.session_state.setdefault("resume_summary", "")
+    st.session_state.setdefault("resume_live_preview", True)
+    # Personal details (now keyed so AI import can populate them)
+    st.session_state.setdefault("resume_first_name", None)
+    st.session_state.setdefault("resume_last_name", None)
+    st.session_state.setdefault("resume_email", None)
+    st.session_state.setdefault("resume_achievements", "")
+    st.session_state.setdefault("resume_hobbies_raw", "")
+    st.session_state.setdefault("resume_skills_raw", "")
+    # AI toolkit result caches
+    for k in ("ats_result", "keyword_suggestions", "cover_letter", "linkedin_about",
+              "portfolio_blurb", "hr_email", "interview_questions", "import_message"):
+        st.session_state.setdefault(f"resume_ai_{k}", None)
 
 
 def _remove_entry(state_key: str, entry_id: str) -> None:
     entries = st.session_state[state_key]
     if len(entries) <= 1:
-        return  # never delete the last remaining card
+        return
     st.session_state[state_key] = [e for e in entries if e["_id"] != entry_id]
     st.rerun()
 
@@ -113,7 +147,81 @@ def _card_header(label: str, state_key: str, entry_id: str, can_remove: bool) ->
 
 
 # ------------------------------------------------------------------
-# Education cards
+# Resume Settings: template gallery
+# ------------------------------------------------------------------
+def _render_template_gallery() -> None:
+    templates = list_templates()
+    selected = st.session_state["resume_template_id"]
+    cols = st.columns(len(templates))
+
+    for col, tpl in zip(cols, templates):
+        is_selected = tpl.id == selected
+        border_color = "#2563EB" if is_selected else "rgba(255,255,255,0.12)"
+        with col:
+            st.markdown(
+                f"""
+                <div style="border:2px solid {border_color}; border-radius:12px; padding:12px;
+                            min-height:150px; background:rgba(255,255,255,0.03);">
+                    <div style="font-weight:700; font-size:0.98rem;">
+                        {'⭐ ' if is_selected else ''}{tpl.name}
+                    </div>
+                    <div style="font-size:0.8rem; opacity:0.75; margin:2px 0 6px;">{tpl.tagline}</div>
+                    <div style="font-size:0.75rem; opacity:0.65; line-height:1.3;">{tpl.description}</div>
+                    <div style="margin-top:8px; display:inline-block; font-size:0.72rem;
+                                background:rgba(34,211,176,0.12); color:#22D3B0; border:1px solid rgba(34,211,176,0.4);
+                                border-radius:999px; padding:2px 8px;">
+                        ATS Score {tpl.ats_score}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            btn_label = "✅ Selected" if is_selected else "Select"
+            if st.button(btn_label, key=f"select_tpl_{tpl.id}", use_container_width=True,
+                         disabled=is_selected):
+                st.session_state["resume_template_id"] = tpl.id
+                st.rerun()
+
+
+def _render_resume_settings() -> None:
+    glass_card_open("⚙️ Resume Settings")
+    st.caption("Pick a template and a few preferences - everything below still maps onto "
+               "the same form fields further down. No new data required to generate a resume.")
+
+    st.markdown("**Resume Template**")
+    _render_template_gallery()
+
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+    # Note: these widgets bind directly to session_state via `key=` (no
+    # `value=` passed alongside it) so that programmatic updates - e.g.
+    # from the "Import Resume" auto-fill feature - can update them by
+    # writing to st.session_state before the next rerun.
+    c1, c2, c3 = st.columns(3)
+    c1.text_input("Target Job Role", key="resume_target_role", placeholder="e.g. Software Engineer")
+    c2.selectbox("Experience Level", EXPERIENCE_LEVELS, key="resume_experience_level")
+    c3.selectbox("Resume Language", ["English"], index=0, disabled=True,
+                 help="More languages coming soon.")
+
+    c4, c5, c6 = st.columns(3)
+    c4.selectbox("Accent Color", list(ACCENT_COLORS.keys()), key="resume_accent_color_name")
+    c5.toggle("One Page", key="resume_one_page",
+              help="Off = a slightly more relaxed, two-page-friendly layout.")
+    c6.toggle("Show Photo", key="resume_show_photo")
+
+    if st.session_state["resume_show_photo"]:
+        photo_file = st.file_uploader(
+            "Upload a headshot (used for this download only, not saved to your account)",
+            type=["png", "jpg", "jpeg"], key="resume_photo_uploader",
+        )
+        if photo_file is not None:
+            st.session_state["resume_photo_bytes"] = photo_file.read()
+
+    st.toggle("Live Resume Preview", key="resume_live_preview")
+    glass_card_close()
+
+
+# ------------------------------------------------------------------
+# Education cards (unchanged from the original builder)
 # ------------------------------------------------------------------
 def _render_education_entries() -> list[dict]:
     entries = st.session_state["resume_education"]
@@ -240,6 +348,12 @@ def _render_project_entries() -> list[dict]:
             entry["description"] = st.text_area(
                 "Description", value=entry["description"], key=f"proj_desc_{eid}", height=70,
             )
+            if st.button("✨ Improve wording", key=f"proj_improve_{eid}"):
+                with st.spinner("Rewriting..."):
+                    entry["description"] = improve_bullet_point(
+                        entry["description"], st.session_state["resume_target_role"]
+                    )
+                st.rerun()
     if st.button("➕ Add Another Project", key="add_resume_projects"):
         _add_entry("resume_projects")
     return entries
@@ -275,9 +389,240 @@ def _render_internship_entries() -> list[dict]:
             entry["description"] = st.text_area(
                 "Description", value=entry["description"], key=f"intern_desc_{eid}", height=70,
             )
+            if st.button("✨ Improve wording", key=f"intern_improve_{eid}"):
+                with st.spinner("Rewriting..."):
+                    entry["description"] = improve_bullet_point(
+                        entry["description"], st.session_state["resume_target_role"]
+                    )
+                st.rerun()
     if st.button("➕ Add Another Internship", key="add_resume_internships"):
         _add_entry("resume_internships")
     return entries
+
+
+# ------------------------------------------------------------------
+# Resume import / auto-fill
+# ------------------------------------------------------------------
+def _apply_imported_fields(data: dict) -> None:
+    """Map an AI-parsed import dict onto the existing form's session_state."""
+    if data.get("first_name"):
+        st.session_state["resume_first_name"] = data["first_name"]
+    if data.get("last_name"):
+        st.session_state["resume_last_name"] = data["last_name"]
+    if data.get("email"):
+        st.session_state["resume_email"] = data["email"]
+    if data.get("target_role"):
+        st.session_state["resume_target_role"] = data["target_role"]
+    if data.get("summary"):
+        st.session_state["resume_summary"] = data["summary"]
+    if data.get("skills"):
+        st.session_state["resume_skills_raw"] = ", ".join(str(s) for s in data["skills"])
+    if data.get("hobbies"):
+        st.session_state["resume_hobbies_raw"] = ", ".join(str(h) for h in data["hobbies"])
+    if data.get("achievements"):
+        st.session_state["resume_achievements"] = str(data["achievements"])
+
+    if data.get("education"):
+        edu_lines = [l.strip() for l in str(data["education"]).splitlines() if l.strip()]
+        entry = _empty_education()
+        if edu_lines:
+            entry["degree"] = edu_lines[0]
+        if len(edu_lines) > 1:
+            entry["institution"] = edu_lines[1]
+        if len(edu_lines) > 2:
+            entry["university_board"] = edu_lines[2]
+        st.session_state["resume_education"] = [entry]
+
+    if data.get("projects"):
+        st.session_state["resume_projects"] = [
+            {**_empty_project(), "title": p.get("title", ""), "tech_stack": p.get("tech_stack", ""),
+             "description": p.get("description", "")}
+            for p in data["projects"] if isinstance(p, dict) and (p.get("title") or p.get("description"))
+        ] or st.session_state["resume_projects"]
+
+    if data.get("internships"):
+        st.session_state["resume_internships"] = [
+            {**_empty_internship(), "role": i.get("role", ""), "company": i.get("company", ""),
+             "duration": i.get("duration", ""), "description": i.get("description", "")}
+            for i in data["internships"] if isinstance(i, dict) and (i.get("role") or i.get("description"))
+        ] or st.session_state["resume_internships"]
+
+    if data.get("certificates"):
+        st.session_state["resume_certificates"] = [
+            {**_empty_certificate(), "name": c.get("name", ""), "issuer": c.get("issuer", ""),
+             "year": c.get("year", "")}
+            for c in data["certificates"] if isinstance(c, dict) and c.get("name")
+        ] or st.session_state["resume_certificates"]
+
+
+def _render_import_section() -> None:
+    with st.expander("📥 Import an existing resume (PDF/DOCX) to auto-fill this form"):
+        uploaded = st.file_uploader("Upload resume", type=["pdf", "docx"], key="resume_import_uploader")
+        if st.button("Import & Auto-fill", key="resume_import_btn", disabled=uploaded is None):
+            with st.spinner("Reading your resume..."):
+                raw_bytes = uploaded.read()
+                text = (extract_text_from_pdf(raw_bytes) if uploaded.type == "application/pdf"
+                        else extract_text_from_docx(raw_bytes))
+                data = parse_resume_text_to_fields(text) if text else None
+            if not data:
+                st.session_state["resume_ai_import_message"] = (
+                    "Couldn't read that file automatically - try filling the form manually, "
+                    "or upload a text-based (not scanned) PDF/DOCX."
+                )
+            else:
+                _apply_imported_fields(data)
+                st.session_state["resume_ai_import_message"] = "✅ Form auto-filled - review and edit below."
+                st.rerun()
+        if st.session_state["resume_ai_import_message"]:
+            st.info(st.session_state["resume_ai_import_message"])
+
+
+# ------------------------------------------------------------------
+# AI Toolkit
+# ------------------------------------------------------------------
+def _render_ai_toolkit(preview_profile: ResumeProfile) -> None:
+    with st.expander("🤖 AI Resume Toolkit", expanded=False):
+        completeness = resume_completeness(preview_profile)
+        st.progress(completeness.percent / 100, text=f"Resume Completeness: {completeness.percent}%")
+        if completeness.missing:
+            st.caption("Still missing: " + ", ".join(completeness.missing))
+
+        dupes = find_duplicate_skills(preview_profile.skills)
+        if dupes:
+            st.warning(f"Duplicate skills detected: {', '.join(dupes)}")
+
+        t1, t2, t3, t4 = st.tabs(["ATS Score", "Cover Letter / LinkedIn", "Portfolio / HR Email", "Interview Prep"])
+
+        with t1:
+            if st.button("🎯 Check ATS Score", key="ai_ats_btn"):
+                with st.spinner("Scoring..."):
+                    st.session_state["resume_ai_ats_result"] = check_ats_score(preview_profile)
+            if st.button("🔑 Suggest Keywords", key="ai_kw_btn"):
+                with st.spinner("Finding relevant keywords..."):
+                    st.session_state["resume_ai_keyword_suggestions"] = suggest_keywords(preview_profile)
+
+            result = st.session_state["resume_ai_ats_result"]
+            if result is not None:
+                st.metric("ATS Score", f"{result.ats_score}/100")
+                if result.missing_sections:
+                    st.caption("Missing sections: " + ", ".join(result.missing_sections))
+                for tip in result.suggestions[:6]:
+                    st.markdown(f"- {tip}")
+
+            kws = st.session_state["resume_ai_keyword_suggestions"]
+            if kws:
+                st.caption("Consider adding (if relevant): " + ", ".join(kws))
+                if st.button("➕ Add these to my Skills", key="ai_add_kw_btn"):
+                    current = [s.strip() for s in st.session_state["resume_skills_raw"].split(",") if s.strip()]
+                    st.session_state["resume_skills_raw"] = ", ".join(dict.fromkeys(current + kws))
+                    st.rerun()
+
+        with t2:
+            # These four use st.code() rather than st.text_area() for the
+            # generated output. A text_area with its own separate key
+            # would "freeze" after the first generation: clicking
+            # Generate/Regenerate a second time updates
+            # resume_ai_cover_letter etc., but Streamlit hands display
+            # authority for a *keyed* widget to whatever's already stored
+            # under THAT widget's own key - not to a fresh `value=` - so a
+            # second click would silently keep showing the first result.
+            # st.code() has no independent widget state, so it always
+            # reflects the current session_state value, and gets a
+            # copy-to-clipboard button as a bonus.
+            cc1, cc2 = st.columns(2)
+            company = cc1.text_input("Company (optional)", key="ai_cover_company")
+            if cc2.button("✉️ Generate Cover Letter", key="ai_cover_btn"):
+                with st.spinner("Drafting..."):
+                    st.session_state["resume_ai_cover_letter"] = generate_cover_letter(preview_profile, company)
+            if st.session_state["resume_ai_cover_letter"]:
+                st.caption("Cover Letter")
+                st.code(st.session_state["resume_ai_cover_letter"], language=None, wrap_lines=True)
+
+            if st.button("💼 Generate LinkedIn About", key="ai_linkedin_btn"):
+                with st.spinner("Drafting..."):
+                    st.session_state["resume_ai_linkedin_about"] = generate_linkedin_about(preview_profile)
+            if st.session_state["resume_ai_linkedin_about"]:
+                st.caption("LinkedIn About")
+                st.code(st.session_state["resume_ai_linkedin_about"], language=None, wrap_lines=True)
+
+        with t3:
+            if st.button("🌐 Generate Portfolio Intro", key="ai_portfolio_btn"):
+                with st.spinner("Drafting..."):
+                    st.session_state["resume_ai_portfolio_blurb"] = generate_portfolio_blurb(preview_profile)
+            if st.session_state["resume_ai_portfolio_blurb"]:
+                st.caption("Portfolio Homepage Intro")
+                st.code(st.session_state["resume_ai_portfolio_blurb"], language=None, wrap_lines=True)
+
+            purpose = st.text_input("Email purpose", value="job application follow-up", key="ai_hr_purpose")
+            if st.button("📧 Generate HR Email", key="ai_hr_btn"):
+                with st.spinner("Drafting..."):
+                    st.session_state["resume_ai_hr_email"] = generate_hr_email(preview_profile, purpose)
+            if st.session_state["resume_ai_hr_email"]:
+                st.caption("HR Email")
+                st.code(st.session_state["resume_ai_hr_email"], language=None, wrap_lines=True)
+
+        with t4:
+            if st.button("🧠 Generate Interview Questions", key="ai_interview_btn"):
+                with st.spinner("Thinking..."):
+                    st.session_state["resume_ai_interview_questions"] = generate_interview_questions(preview_profile)
+            if st.session_state["resume_ai_interview_questions"]:
+                st.markdown(st.session_state["resume_ai_interview_questions"])
+
+
+# ------------------------------------------------------------------
+# Live preview (template-aware HTML card)
+# ------------------------------------------------------------------
+def _render_live_preview(profile: ResumeProfile) -> None:
+    template = get_template(profile.template_id)
+    accent = profile.accent_color or "#2563EB"
+    style = template.style
+    is_banner = style.header_style == "banner"
+    is_center = style.name_align == "center"
+
+    header_bg = f"background:{accent}; color:white; border-radius:8px 8px 0 0;" if is_banner else ""
+    align = "text-align:center;" if is_center else ""
+    name_color = "white" if is_banner else ("#111827" if style.header_style != "sidebar-bar" else accent)
+
+    def esc(s: str) -> str:
+        return (s or "").replace("<", "&lt;").replace(">", "&gt;")
+
+    sections_html = ""
+    if profile.summary:
+        sections_html += f"<h4 style='color:{accent}; margin-bottom:2px;'>Professional Summary</h4><p>{esc(profile.summary)}</p>"
+    if profile.education:
+        edu_html = esc(profile.education).replace("\n", "<br>")
+        sections_html += f"<h4 style='color:{accent}; margin-bottom:2px;'>Education</h4><p>{edu_html}</p>"
+    if profile.skills:
+        sections_html += f"<h4 style='color:{accent}; margin-bottom:2px;'>Skills</h4><p>{esc(', '.join(profile.skills))}</p>"
+    if profile.internships:
+        rows = "".join(
+            f"<p><b>{esc(i.role)}</b> - {esc(i.company)} ({esc(i.duration)})<br>{esc(i.description)}</p>"
+            for i in profile.internships
+        )
+        sections_html += f"<h4 style='color:{accent}; margin-bottom:2px;'>Experience</h4>{rows}"
+    if profile.projects:
+        rows = "".join(
+            f"<p><b>{esc(p.title)}</b> ({esc(p.tech_stack)})<br>{esc(p.description)}</p>"
+            for p in profile.projects
+        )
+        sections_html += f"<h4 style='color:{accent}; margin-bottom:2px;'>Projects</h4>{rows}"
+
+    st.markdown(
+        f"""
+        <div style="background:white; color:#1f2937; border-radius:8px; overflow:hidden;
+                    box-shadow:0 4px 20px rgba(0,0,0,0.25); max-width:680px;">
+            <div style="padding:18px 22px; {header_bg} {align}">
+                <div style="font-size:1.4rem; font-weight:700; color:{name_color};">{esc(profile.full_name) or 'Your Name'}</div>
+                <div style="font-size:0.85rem; opacity:0.85; color:{'white' if is_banner else accent};">{esc(profile.target_role)}</div>
+                <div style="font-size:0.78rem; opacity:0.75; color:{'white' if is_banner else '#4b5563'};">{esc(profile.email)}</div>
+            </div>
+            <div style="padding:16px 22px; font-size:0.85rem; line-height:1.4;">
+                {sections_html or "<p style='opacity:0.6;'>Fill in the form to see your resume take shape here.</p>"}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ------------------------------------------------------------------
@@ -286,18 +631,60 @@ def _render_internship_entries() -> list[dict]:
 def render_resume_builder_page():
     _init_state()
     user = st.session_state.get("auth_user") or {}
+    if st.session_state["resume_first_name"] is None:
+        st.session_state["resume_first_name"] = user.get("first_name", "")
+    if st.session_state["resume_last_name"] is None:
+        st.session_state["resume_last_name"] = user.get("last_name", "")
+    if st.session_state["resume_email"] is None:
+        st.session_state["resume_email"] = user.get("email", "")
 
     hero(
         "ATS Resume Builder", "📄 Resume Builder",
-        "Build a clean, single-column, ATS-friendly resume - fill in your "
+        "Build a clean, ATS-friendly resume - pick a template, fill in your "
         "details below, save your progress, then generate a PDF or Word download.",
     )
 
+    _render_resume_settings()
+    _render_import_section()
+
     glass_card_open("👤 Personal Details")
     c1, c2 = st.columns(2)
-    first_name = c1.text_input("First Name *", value=user.get("first_name", ""))
-    last_name = c2.text_input("Last Name *", value=user.get("last_name", ""))
-    email = st.text_input("Email *", value=user.get("email", ""))
+    first_name = c1.text_input("First Name *", key="resume_first_name")
+    last_name = c2.text_input("Last Name *", key="resume_last_name")
+    email = st.text_input("Email *", key="resume_email")
+    glass_card_close()
+
+    glass_card_open("📝 Professional Summary")
+    sc1, sc2 = st.columns([4, 1])
+    with sc2:
+        if st.button("✨ Generate from data", key="ai_summary_btn", use_container_width=True):
+            with st.spinner("Writing..."):
+                draft_profile = ResumeProfile(
+                    first_name=first_name, last_name=last_name, email=email,
+                    education=_education_entries_to_text(st.session_state["resume_education"]),
+                    skills=[s.strip() for s in st.session_state["resume_skills_raw"].split(",") if s.strip()],
+                    target_role=st.session_state["resume_target_role"],
+                    experience_level=st.session_state["resume_experience_level"],
+                    internships=[InternshipEntry(role=e["role"], company=e["company"],
+                                                  duration=e["duration"], description=e["description"])
+                                 for e in st.session_state["resume_internships"] if e["role"].strip()],
+                    projects=[ProjectEntry(title=e["title"], tech_stack=e["tech_stack"],
+                                            description=e["description"])
+                              for e in st.session_state["resume_projects"] if e["title"].strip()],
+                )
+                st.session_state["resume_summary"] = generate_professional_summary(draft_profile)
+            st.rerun()
+        if st.button("✅ Grammar Check", key="ai_grammar_btn", use_container_width=True):
+            with st.spinner("Polishing..."):
+                st.session_state["resume_summary"] = polish_grammar(st.session_state["resume_summary"])
+            st.rerun()
+    with sc1:
+        # key="resume_summary" directly - NOT a separate "_input" key - so
+        # that setting st.session_state["resume_summary"] from the AI
+        # Generate/Grammar Check buttons above (or from Import Resume)
+        # actually changes what's displayed here. A mismatched key would
+        # make Streamlit ignore the `value=` after the first render.
+        st.text_area("2-3 sentence summary (optional)", height=90, key="resume_summary")
     glass_card_close()
 
     glass_card_open("🎓 Education")
@@ -305,8 +692,13 @@ def render_resume_builder_page():
     glass_card_close()
 
     glass_card_open("🧠 Skills")
-    skills_raw = st.text_area("Skills (comma-separated)", height=70,
-                               placeholder="Python, SQL, Data Analysis, Communication")
+    # key="resume_skills_raw" (not just value=) so the AI Toolkit's
+    # "Add these to my Skills" button and Import Resume auto-fill can
+    # actually change what's shown here.
+    st.text_area(
+        "Skills (comma-separated)", height=70, key="resume_skills_raw",
+        placeholder="Python, SQL, Data Analysis, Communication",
+    )
     glass_card_close()
 
     glass_card_open("💼 Internships")
@@ -322,11 +714,13 @@ def render_resume_builder_page():
     glass_card_close()
 
     glass_card_open("🏆 Achievements")
-    achievements = st.text_area("Achievements (one per line)", height=80)
+    # key="resume_achievements" so Import Resume auto-fill can update it.
+    st.text_area("Achievements (one per line)", height=80, key="resume_achievements")
     glass_card_close()
 
     glass_card_open("🌐 Hobbies")
-    hobbies_raw = st.text_input("Hobbies (comma-separated)")
+    # key="resume_hobbies_raw" so Import Resume auto-fill can update it.
+    st.text_input("Hobbies (comma-separated)", key="resume_hobbies_raw")
     glass_card_close()
 
     def _build_profile() -> ResumeProfile:
@@ -335,9 +729,9 @@ def render_resume_builder_page():
             last_name=last_name.strip(),
             email=email.strip(),
             education=_education_entries_to_text(education_entries),
-            skills=[s.strip() for s in skills_raw.split(",") if s.strip()],
-            achievements=achievements.strip(),
-            hobbies=[s.strip() for s in hobbies_raw.split(",") if s.strip()],
+            skills=[s.strip() for s in st.session_state["resume_skills_raw"].split(",") if s.strip()],
+            achievements=st.session_state["resume_achievements"].strip(),
+            hobbies=[s.strip() for s in st.session_state["resume_hobbies_raw"].split(",") if s.strip()],
             projects=[
                 ProjectEntry(title=e["title"], tech_stack=e["tech_stack"], description=e["description"])
                 for e in project_entries if e["title"].strip()
@@ -351,7 +745,16 @@ def render_resume_builder_page():
                                  duration=e["duration"], description=e["description"])
                 for e in internship_entries if e["role"].strip()
             ],
+            template_id=st.session_state["resume_template_id"],
+            target_role=st.session_state["resume_target_role"].strip(),
+            experience_level=st.session_state["resume_experience_level"],
+            summary=st.session_state["resume_summary"].strip(),
+            accent_color=ACCENT_COLORS.get(st.session_state["resume_accent_color_name"], "#2563EB"),
+            one_page=st.session_state["resume_one_page"],
+            show_photo=st.session_state["resume_show_photo"],
         )
+
+    _render_ai_toolkit(_build_profile())
 
     b1, b2, b3, b4 = st.columns(4)
 
@@ -373,11 +776,12 @@ def render_resume_builder_page():
             st.success("✅ Resume generated below - use the download buttons to save it.")
 
     profile: ResumeProfile | None = st.session_state["resume_profile"]
+    photo_bytes = st.session_state["resume_photo_bytes"] if st.session_state["resume_show_photo"] else None
 
     with b3:
         if profile is not None:
             try:
-                pdf_bytes = build_resume_pdf(profile)
+                pdf_bytes = build_resume_pdf(profile, photo_bytes=photo_bytes)
                 st.download_button(
                     "⬇️ Download PDF", data=pdf_bytes,
                     file_name=f"{profile.full_name.replace(' ', '_') or 'resume'}.pdf",
@@ -391,7 +795,7 @@ def render_resume_builder_page():
     with b4:
         if profile is not None:
             try:
-                docx_bytes = build_resume_docx(profile)
+                docx_bytes = build_resume_docx(profile, photo_bytes=photo_bytes)
                 st.download_button(
                     "⬇️ Download DOCX", data=docx_bytes,
                     file_name=f"{profile.full_name.replace(' ', '_') or 'resume'}.docx",
@@ -403,16 +807,12 @@ def render_resume_builder_page():
         else:
             st.button("⬇️ Download DOCX", disabled=True, use_container_width=True)
 
-    if profile is not None:
-        st.markdown("### 👁️ Preview")
-        glass_card_open(profile.full_name or "Your Name")
-        st.caption(profile.email)
-        if profile.education:
-            st.markdown("**Education**")
-            st.text(profile.education)
-        if profile.skills:
-            st.markdown(f"**Skills**  \n{', '.join(profile.skills)}")
-        glass_card_close()
+    if st.session_state["resume_live_preview"]:
+        st.markdown("### 👁️ Live Preview")
+        _render_live_preview(_build_profile())
 
     if not email:
         st.caption("Add your email above so your resume can be saved and retrieved later.")
+
+
+# End of frontend/resume_builder.py
