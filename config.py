@@ -105,6 +105,23 @@ class JobSearchConfig:
     remoteok_api_url: str
 
 
+@dataclass(frozen=True)
+class SupabaseConfig:
+    """Supabase PostgreSQL connection settings (replaces Google Sheets storage).
+
+    SUPABASE_SERVICE_ROLE_KEY is a backend-only secret — it must never be
+    read from or exposed to the Streamlit frontend/browser. Only modules
+    under backend/ may import and use it (enforced by convention: only
+    backend/supabase_client.py reads this config).
+    """
+    url: str
+    service_role_key: str
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.url and self.service_role_key)
+
+
 def load_config() -> WatsonxConfig:
     return WatsonxConfig(
         api_key=_get_env("WATSONX_API_KEY", required=False),
@@ -158,8 +175,16 @@ def load_job_search_config() -> JobSearchConfig:
     )
 
 
+def load_supabase_config() -> SupabaseConfig:
+    return SupabaseConfig(
+        url=_get_env("SUPABASE_URL", required=False),
+        service_role_key=_get_env("SUPABASE_SERVICE_ROLE_KEY", required=False),
+    )
+
+
 CONFIG = load_config()
-SHEETS_CONFIG = load_sheets_config()
+SHEETS_CONFIG = load_sheets_config()  # retained for reference only; no longer used for storage
 ORCHESTRATE_CONFIG = load_orchestrate_config()
 OPENROUTER_CONFIG = load_openrouter_config()
 JOB_SEARCH_CONFIG = load_job_search_config()
+SUPABASE_CONFIG = load_supabase_config()
