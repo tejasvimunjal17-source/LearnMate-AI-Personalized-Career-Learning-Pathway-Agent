@@ -72,6 +72,14 @@ class ResumeProfile:
     is the required lookup key for get_latest_resume()/update_resume()
     and for the "email" column in the "Users Resume Details" sheet -
     without it, a saved resume could never be retrieved or updated.
+
+    The fields below `created_at` (template_id through show_photo) are
+    an additive "Resume Settings" extension for the template gallery /
+    AI toolkit. They all have safe defaults, are appended to the END of
+    the sheet header (never inserted in the middle), and _from_row()
+    reads them with .get(..., default) - so existing rows saved before
+    this change still load correctly, and no existing field, column
+    position, or caller is touched.
     """
     first_name: str
     last_name: str
@@ -84,17 +92,28 @@ class ResumeProfile:
     achievements: str = ""
     hobbies: list[str] = field(default_factory=list)
     created_at: str = ""
+    # --- Resume Settings (additive) ---
+    template_id: str = "classic_pro"
+    accent_color: str = "#2563EB"
+    target_role: str = ""
+    experience_level: str = "Fresher"
+    summary: str = ""
+    one_page: bool = True
+    show_photo: bool = False
 
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
 
 
-# Column order for the "Users Resume Details" sheet.
+# Column order for the "Users Resume Details" sheet. New columns are
+# appended at the end so existing sheet rows/data are never shifted.
 RESUME_SHEET_HEADER: list[str] = [
     "email", "first_name", "last_name", "education", "skills",
     "certificates_json", "internships_json", "projects_json",
     "achievements", "hobbies", "created_at",
+    "template_id", "accent_color", "target_role", "experience_level",
+    "summary", "one_page", "show_photo",
 ]
 
 
@@ -142,6 +161,13 @@ def _to_row(profile: ResumeProfile) -> dict[str, Any]:
         "achievements": profile.achievements,
         "hobbies": ", ".join(profile.hobbies),
         "created_at": profile.created_at or datetime.now(timezone.utc).isoformat(),
+        "template_id": profile.template_id or "classic_pro",
+        "accent_color": profile.accent_color or "#2563EB",
+        "target_role": profile.target_role,
+        "experience_level": profile.experience_level or "Fresher",
+        "summary": profile.summary,
+        "one_page": "true" if profile.one_page else "false",
+        "show_photo": "true" if profile.show_photo else "false",
     }
 
 
@@ -170,6 +196,13 @@ def _from_row(row: dict[str, Any]) -> ResumeProfile:
         achievements=row.get("achievements", ""),
         hobbies=_split(row.get("hobbies", "")),
         created_at=row.get("created_at", ""),
+        template_id=row.get("template_id") or "classic_pro",
+        accent_color=row.get("accent_color") or "#2563EB",
+        target_role=row.get("target_role", ""),
+        experience_level=row.get("experience_level") or "Fresher",
+        summary=row.get("summary", ""),
+        one_page=str(row.get("one_page", "true")).strip().lower() != "false",
+        show_photo=str(row.get("show_photo", "false")).strip().lower() == "true",
     )
 
 
