@@ -3,13 +3,43 @@ backend/resume_store.py
 -------------------------
 Data model and persistence layer for the Resume Builder feature.
 
-Follows the same architecture as backend/responses_store.py: a typed
-dataclass model, validation before any write, and all Google Sheets I/O
-delegated to backend/sheets_client.py (which is itself Sheets-first with
-an automatic local-CSV fallback - callers here never need to know which
-backend is actually active).
+As of Phase 4, this module talks directly to Supabase's `resume_details`
+table through backend/resume_details.py — there is no Google Sheets and
+no local CSV/JSON fallback anywhere in this path. If Supabase is
+unreachable, save_resume()/get_latest_resume()/update_resume() raise
+ResumeStoreError immediately rather than silently writing to disk.
 
-Sheet: "Users Resume Details"
+Every resume is linked to its owner via `user_id` (a foreign key into
+`users`, resolved from the caller's email) — resume_details has no email
+column of its own.
+
+--- Resume Settings fields (template selection / AI toolkit) ---
+first_name/last_name/email/education/skills/certificates/internships/
+projects/achievements/hobbies/created_at are unchanged from before.
+Seven more fields were added to match the current frontend/resume_builder.py
+(template gallery, accent color picker, target role, experience level,
+AI-generated summary, one-page toggle, photo toggle):
+
+    template_id, accent_color, target_role, experience_level,
+    summary, one_page, show_photo
+
+`template_id` reuses the EXISTING `resume_template` Supabase column from
+the earlier Phase 4 migration (sql/003_resume_details_additions.sql) —
+the dataclass field is renamed to match frontend/resume_builder.py's and
+backend/resume_generator.py's keyword (`template_id=...`), but no
+database column was renamed; `resume_template` still exists exactly as
+it did, just mapped under a different Python-side name in this file's
+serialization layer. accent_color, target_role, experience_level,
+summary, one_page, show_photo are genuinely new columns — see
+sql/010_resume_settings_additions.sql. `pdf_path`/`docx_path` are also
+unchanged from before (still unpopulated, for the same reason documented
+below - no durable file storage exists yet).
+
+Public API (save_resume, get_latest_resume, update_resume, _from_db_row,
+and the ResumeProfile/ProjectEntry/CertificateEntry/InternshipEntry
+dataclasses) keeps the exact names frontend/resume_builder.py,
+backend/resume_generator.py, backend/resume_ai.py, backend/resume_ats.py,
+and frontend/profile_page.py already import.
 """
 
 from __future__ import annotations
@@ -19,21 +49,22 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from config import SHEETS_CONFIG
-from backend.sheets_client import append_row, read_rows, update_row
+from backend.resume_details import (
+    resolve_user_id,
+    insert_resume_details,
+    get_latest_for_user,
+    update_for_user,
+    ResumeDetailsError,
+)
 from backend.logger_setup import get_logger
 
 logger = get_logger(__name__)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# config.py does not currently define a dedicated sheet-name field for the
-# resume-builder sheet (unlike users_sheet_name / responses_sheet_name /
-# resume_review_sheet_name). We read it defensively via getattr so this
-# module still honors "reuse config.py for sheet names" if/when that field
-# is added, without requiring a config.py edit right now and without
-# crashing if it's absent.
-RESUME_SHEET_NAME: str = getattr(SHEETS_CONFIG, "resume_sheet_name", "Users Resume Details")
+_VALID_EXPERIENCE_LEVELS = ("Fresher", "Entry Level", "Mid Level", "Senior", "Lead / Manager")
+_DEFAULT_ACCENT_COLOR = "#2563EB"
+_DEFAULT_TEMPLATE_ID = "classic_pro"
 
 
 class ResumeStoreError(RuntimeError):
@@ -56,6 +87,8 @@ class CertificateEntry:
 
 @dataclass
 class InternshipEntry:
+    """A work/internship experience entry (maps to the "Experience" section
+    of a generated resume)."""
     role: str = ""
     company: str = ""
     duration: str = ""
@@ -66,20 +99,17 @@ class InternshipEntry:
 class ResumeProfile:
     """A user's resume details, as captured by the Resume Builder form.
 
-    Note: `email` is included in addition to the fields explicitly
-    requested (first_name, last_name, education, skills, certificates,
-    internships, projects, achievements, hobbies, created_at) because it
-    is the required lookup key for get_latest_resume()/update_resume()
-    and for the "email" column in the "Users Resume Details" sheet -
-    without it, a saved resume could never be retrieved or updated.
+    `email` is the lookup key used to resolve the owning user_id in
+    Supabase - required for every save/update, but never stored as a
+    column on resume_details itself (that table has no email column;
+    ownership is expressed purely via the user_id foreign key).
 
-    The fields below `created_at` (template_id through show_photo) are
-    an additive "Resume Settings" extension for the template gallery /
-    AI toolkit. They all have safe defaults, are appended to the END of
-    the sheet header (never inserted in the middle), and _from_row()
-    reads them with .get(..., default) - so existing rows saved before
-    this change still load correctly, and no existing field, column
-    position, or caller is touched.
+    pdf_path / docx_path default to empty string and stay that way:
+    backend/resume_generator.py produces in-memory bytes for direct
+    download rather than writing to a durable path anywhere, so these
+    fields are honestly left blank rather than filled with a fabricated
+    value. See sql/003_resume_details_additions.sql for the original
+    note on this.
     """
     first_name: str
     last_name: str
@@ -87,14 +117,16 @@ class ResumeProfile:
     education: str = ""
     skills: list[str] = field(default_factory=list)
     certificates: list[CertificateEntry] = field(default_factory=list)
-    internships: list[InternshipEntry] = field(default_factory=list)
+    internships: list[InternshipEntry] = field(default_factory=list)  # = "Experience"
     projects: list[ProjectEntry] = field(default_factory=list)
     achievements: str = ""
     hobbies: list[str] = field(default_factory=list)
     created_at: str = ""
-    # --- Resume Settings (additive) ---
-    template_id: str = "classic_pro"
-    accent_color: str = "#2563EB"
+    pdf_path: str = ""
+    docx_path: str = ""
+    # --- Resume Settings (template gallery / AI toolkit) ---
+    template_id: str = _DEFAULT_TEMPLATE_ID
+    accent_color: str = _DEFAULT_ACCENT_COLOR
     target_role: str = ""
     experience_level: str = "Fresher"
     summary: str = ""
@@ -104,17 +136,6 @@ class ResumeProfile:
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
-
-
-# Column order for the "Users Resume Details" sheet. New columns are
-# appended at the end so existing sheet rows/data are never shifted.
-RESUME_SHEET_HEADER: list[str] = [
-    "email", "first_name", "last_name", "education", "skills",
-    "certificates_json", "internships_json", "projects_json",
-    "achievements", "hobbies", "created_at",
-    "template_id", "accent_color", "target_role", "experience_level",
-    "summary", "one_page", "show_photo",
-]
 
 
 # ------------------------------------------------------------------
@@ -144,65 +165,67 @@ def _validate_email(email: str) -> str:
 
 
 # ------------------------------------------------------------------
-# Serialization helpers
+# Serialization: ResumeProfile <-> resume_details DB row shape
+#
+# Column mapping note: profile.template_id <-> db column "resume_template"
+# (existing column, Phase 4 migration 003) - every other field below maps
+# 1:1 by name, including the six genuinely new columns from migration 010
+# (accent_color, target_role, experience_level, summary, one_page,
+# show_photo).
 # ------------------------------------------------------------------
-def _to_row(profile: ResumeProfile) -> dict[str, Any]:
-    import json
-
+def _to_db_payload(profile: ResumeProfile, user_id: str) -> dict[str, Any]:
     return {
-        "email": profile.email.strip(),
+        "user_id": user_id,
         "first_name": profile.first_name.strip(),
         "last_name": profile.last_name.strip(),
         "education": profile.education,
-        "skills": ", ".join(profile.skills),
-        "certificates_json": json.dumps([asdict(c) for c in profile.certificates]),
-        "internships_json": json.dumps([asdict(i) for i in profile.internships]),
-        "projects_json": json.dumps([asdict(p) for p in profile.projects]),
+        "skills": list(profile.skills),
+        "certificates": [asdict(c) for c in profile.certificates],
+        "internships": [asdict(i) for i in profile.internships],
+        "projects": [asdict(p) for p in profile.projects],
         "achievements": profile.achievements,
-        "hobbies": ", ".join(profile.hobbies),
-        "created_at": profile.created_at or datetime.now(timezone.utc).isoformat(),
-        "template_id": profile.template_id or "classic_pro",
-        "accent_color": profile.accent_color or "#2563EB",
+        "hobbies": list(profile.hobbies),
+        "pdf_path": profile.pdf_path,
+        "docx_path": profile.docx_path,
+        "resume_template": profile.template_id or _DEFAULT_TEMPLATE_ID,
+        "accent_color": profile.accent_color or _DEFAULT_ACCENT_COLOR,
         "target_role": profile.target_role,
         "experience_level": profile.experience_level or "Fresher",
         "summary": profile.summary,
-        "one_page": "true" if profile.one_page else "false",
-        "show_photo": "true" if profile.show_photo else "false",
+        "one_page": bool(profile.one_page),
+        "show_photo": bool(profile.show_photo),
     }
 
 
-def _from_row(row: dict[str, Any]) -> ResumeProfile:
-    import json
+def _from_db_row(row: dict[str, Any], email: str) -> ResumeProfile:
+    def _as_list(value: Any) -> list[str]:
+        return list(value) if isinstance(value, list) else []
 
-    def _split(value: str) -> list[str]:
-        return [v.strip() for v in value.split(",") if v.strip()] if value else []
-
-    def _load_list(value: str, cls):
-        try:
-            items = json.loads(value) if value else []
-        except (json.JSONDecodeError, TypeError):
-            items = []
+    def _as_entries(value: Any, cls):
+        items = value if isinstance(value, list) else []
         return [cls(**item) for item in items]
 
     return ResumeProfile(
         first_name=row.get("first_name", ""),
         last_name=row.get("last_name", ""),
-        email=row.get("email", ""),
+        email=email,
         education=row.get("education", ""),
-        skills=_split(row.get("skills", "")),
-        certificates=_load_list(row.get("certificates_json", ""), CertificateEntry),
-        internships=_load_list(row.get("internships_json", ""), InternshipEntry),
-        projects=_load_list(row.get("projects_json", ""), ProjectEntry),
+        skills=_as_list(row.get("skills")),
+        certificates=_as_entries(row.get("certificates"), CertificateEntry),
+        internships=_as_entries(row.get("internships"), InternshipEntry),
+        projects=_as_entries(row.get("projects"), ProjectEntry),
         achievements=row.get("achievements", ""),
-        hobbies=_split(row.get("hobbies", "")),
-        created_at=row.get("created_at", ""),
-        template_id=row.get("template_id") or "classic_pro",
-        accent_color=row.get("accent_color") or "#2563EB",
-        target_role=row.get("target_role", ""),
+        hobbies=_as_list(row.get("hobbies")),
+        pdf_path=row.get("pdf_path", "") or "",
+        docx_path=row.get("docx_path", "") or "",
+        created_at=row.get("created_at", "") or "",
+        template_id=row.get("resume_template") or _DEFAULT_TEMPLATE_ID,
+        accent_color=row.get("accent_color") or _DEFAULT_ACCENT_COLOR,
+        target_role=row.get("target_role", "") or "",
         experience_level=row.get("experience_level") or "Fresher",
-        summary=row.get("summary", ""),
-        one_page=str(row.get("one_page", "true")).strip().lower() != "false",
-        show_photo=str(row.get("show_photo", "false")).strip().lower() == "true",
+        summary=row.get("summary", "") or "",
+        one_page=bool(row.get("one_page", True)) if row.get("one_page") is not None else True,
+        show_photo=bool(row.get("show_photo", False)) if row.get("show_photo") is not None else False,
     )
 
 
@@ -210,50 +233,46 @@ def _from_row(row: dict[str, Any]) -> ResumeProfile:
 # Public API
 # ------------------------------------------------------------------
 def save_resume(profile: ResumeProfile) -> None:
-    """Validate and append a new resume record to the 'Users Resume Details' sheet.
+    """Validate and insert a new resume record into Supabase, linked to the
+    authenticated user via user_id.
 
     Raises:
-        ResumeStoreError: if `profile` fails validation.
+        ResumeStoreError: if `profile` fails validation, the user isn't
+            registered, or Supabase can't be reached.
     """
     _validate_profile(profile)
     if not profile.created_at:
         profile.created_at = datetime.now(timezone.utc).isoformat()
 
-    row = _to_row(profile)
     try:
-        append_row(RESUME_SHEET_NAME, RESUME_SHEET_HEADER, row)
-    except Exception as exc:  # noqa: BLE001 - surface as a domain-specific error
+        user_id = resolve_user_id(profile.email)
+        payload = _to_db_payload(profile, user_id)
+        insert_resume_details(payload)
+    except ResumeDetailsError as exc:
         logger.exception("Failed to save resume for %s", profile.email)
-        raise ResumeStoreError(f"Could not save resume: {exc}") from exc
+        raise ResumeStoreError(str(exc)) from exc
 
-    logger.info("Resume saved for %s", profile.email)
+    logger.info("Resume saved for %s (template=%s)", profile.email, profile.template_id)
 
 
 def get_latest_resume(email: str) -> ResumeProfile | None:
     """Return the most recently saved resume for this email, or None if none exists.
 
     Raises:
-        ResumeStoreError: if `email` is missing/invalid, or the sheet can't be read.
+        ResumeStoreError: if `email` is missing/invalid, or Supabase can't be reached.
     """
     email = _validate_email(email)
 
     try:
-        rows = read_rows(RESUME_SHEET_NAME, RESUME_SHEET_HEADER)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to read resumes while looking up %s", email)
-        raise ResumeStoreError(f"Could not read resume records: {exc}") from exc
+        user_id = resolve_user_id(email)
+        row = get_latest_for_user(user_id)
+    except ResumeDetailsError as exc:
+        logger.exception("Failed to read resume for %s", email)
+        raise ResumeStoreError(str(exc)) from exc
 
-    matches = [r for r in rows if r.get("email") == email]
-    if not matches:
+    if row is None:
         return None
-
-    # Rows are appended in write order, so the last match is the most recent.
-    # If created_at is populated and sortable, prefer that as the tiebreaker.
-    try:
-        matches.sort(key=lambda r: r.get("created_at", ""))
-    except TypeError:
-        pass
-    return _from_row(matches[-1])
+    return _from_db_row(row, email)
 
 
 def update_resume(email: str, profile: ResumeProfile) -> bool:
@@ -277,15 +296,14 @@ def update_resume(email: str, profile: ResumeProfile) -> bool:
     if not profile.created_at:
         profile.created_at = datetime.now(timezone.utc).isoformat()
 
-    row = _to_row(profile)
     try:
-        updated = update_row(
-            RESUME_SHEET_NAME, RESUME_SHEET_HEADER,
-            match_col="email", match_value=email, updates=row,
-        )
-    except Exception as exc:  # noqa: BLE001
+        user_id = resolve_user_id(email)
+        payload = _to_db_payload(profile, user_id)
+        payload.pop("user_id", None)  # never overwrite the FK on update
+        updated = update_for_user(user_id, payload)
+    except ResumeDetailsError as exc:
         logger.exception("Failed to update resume for %s", email)
-        raise ResumeStoreError(f"Could not update resume: {exc}") from exc
+        raise ResumeStoreError(str(exc)) from exc
 
     if updated:
         logger.info("Resume updated for %s", email)
