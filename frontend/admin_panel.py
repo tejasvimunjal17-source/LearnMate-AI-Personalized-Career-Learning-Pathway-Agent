@@ -26,9 +26,12 @@ from frontend.admin_users_page import render_admin_users_page
 from frontend.admin_feedback_page import render_admin_feedback_page
 from frontend.admin_notifications_page import render_admin_notifications_page
 from frontend.admin_broadcast_page import render_admin_broadcast_page
+from frontend.admin_analytics_page import render_admin_analytics_page
+from frontend.admin_export_page import render_admin_export_page
+from backend.activity_logger import log_admin_activity, log_logout
 
-ADMIN_NAV_OPTIONS = ["Dashboard", "Database", "Users", "Feedback", "Announcements", "Notifications"]
-ADMIN_NAV_ICONS = ["speedometer2", "database", "people", "chat-left-text", "megaphone", "bell"]
+ADMIN_NAV_OPTIONS = ["Dashboard", "Database", "Users", "Feedback", "Announcements", "Notifications", "Analytics", "Export"]
+ADMIN_NAV_ICONS = ["speedometer2", "database", "people", "chat-left-text", "megaphone", "bell", "graph-up", "download"]
 
 ADMIN_ROUTES = {
     "Dashboard": render_admin_dashboard_page,
@@ -37,6 +40,8 @@ ADMIN_ROUTES = {
     "Feedback": render_admin_feedback_page,
     "Announcements": render_admin_notifications_page,
     "Notifications": render_admin_broadcast_page,
+    "Analytics": render_admin_analytics_page,
+    "Export": render_admin_export_page,
 }
 
 
@@ -82,7 +87,10 @@ def render_admin_panel() -> None:
 
         st.markdown("---")
         if st.button("🚪 Exit Admin Panel", key="admin_panel_logout", use_container_width=True):
+            log_admin_activity(admin.get("id", ""), "admin_logout")
+            log_logout(st.session_state.get("admin_login_log_id"))
             st.session_state["admin_user"] = None
+            st.session_state["admin_login_log_id"] = None
             st.session_state["admin_page"] = "Dashboard"
             st.rerun()
 
