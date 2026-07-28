@@ -91,3 +91,20 @@ def save_generated_roadmap(email: str, profile: StudentProfile, roadmap: dict[st
         return
 
     logger.info("Generated roadmap persisted for %s", email)
+
+
+def delete_roadmap_for_user(roadmap_id: str, user_id: str) -> bool:
+    """Delete one roadmap, scoped to user_id so a user can only ever delete
+    their own roadmaps. Returns True if a row was deleted. Raises on a
+    genuine Supabase failure (distinct from save_generated_roadmap's
+    best-effort logging convention - a user-initiated delete should
+    surface a real error if it didn't work)."""
+    try:
+        client = _get_client()
+        resp = client.table(TABLE).delete().eq("id", roadmap_id).eq("user_id", user_id).execute()
+    except SupabaseUnavailableError as exc:
+        raise RuntimeError(f"Supabase is not configured/reachable: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to delete roadmap id=%s for user_id=%s", roadmap_id, user_id)
+        raise RuntimeError(f"Could not delete roadmap: {exc}") from exc
+    return bool(resp.data)
