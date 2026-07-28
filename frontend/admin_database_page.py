@@ -2,9 +2,16 @@
 frontend/admin_database_page.py
 ------------------------------------
 Database Explorer: one sub-tab per Supabase table, each a searchable,
-sortable, filterable, paginated table with a live row count and
-CSV / Excel export — reading real data only, via
+sortable, filterable, paginated table with a live row count, a manual
+Refresh control, and CSV / Excel export — reading real data only, via
 backend.admin_data.fetch_table_df() (no direct DB calls here).
+
+Note on "Refresh": there is no caching layer anywhere in this page —
+fetch_table_df() queries Supabase fresh on every Streamlit rerun already.
+The Refresh button doesn't bypass a cache (there isn't one to bypass); it
+gives the admin an explicit, obvious way to force a new fetch (e.g. after
+making a change on another tab) without hunting for an unrelated widget
+to nudge.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ TAB_LABEL_TO_DB_KEY: dict[str, str] = {
     "Login Logs": "Login Logs",
     "User Activity": "User Activity Logs",
     "Announcements": "Announcements",
+    "Notifications": "Notifications",
 }
 
 
@@ -44,6 +52,10 @@ def _to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 
 
 def _render_table_tab(label: str, key_prefix: str) -> None:
+    top_bar = st.columns([5, 1])
+    if top_bar[1].button("🔄 Refresh", key=f"{key_prefix}_refresh", use_container_width=True):
+        st.rerun()
+
     try:
         df = fetch_table_df(TAB_LABEL_TO_DB_KEY[label])
     except AdminDataError as exc:
@@ -56,6 +68,8 @@ def _render_table_tab(label: str, key_prefix: str) -> None:
         st.markdown(f"<p class='muted'>No rows in '{label}' yet.</p>", unsafe_allow_html=True)
         glass_card_close()
         return
+
+    st.caption(f"**{len(df)}** total record(s) in this table.")
 
     # --- Search ---
     search_term = st.text_input(
