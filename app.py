@@ -85,6 +85,7 @@ DEFAULTS = {
     "chat_history": [],
     "admin_user": None,          # separate from auth_user - {id, email, first_name, last_name, is_super_admin}
     "login_log_id": None,        # login_logs row id for the current session, stamped with logout_time on logout
+    "admin_login_log_id": None,  # same, for the separate admin session
     "admin_page": "Dashboard",
     "force_admin_mode": False,
 }
