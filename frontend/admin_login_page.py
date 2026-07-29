@@ -18,6 +18,7 @@ from __future__ import annotations
 import streamlit as st
 
 from backend.admin_auth import verify_admin_login, AdminAuthError
+from backend.activity_logger import log_admin_login, log_admin_activity
 from frontend.components import hero, glass_card_open, glass_card_close
 
 
@@ -38,22 +39,27 @@ def render_admin_login_page() -> None:
     glass_card_close()
 
     if submitted:
+        admin = None
         try:
             admin = verify_admin_login(email, password)
         except AdminAuthError as exc:
             st.error(str(exc))
-            return
+        except Exception as exc:  # noqa: BLE001 - never let an unexpected error strand the user here
+            st.error(f"Something went wrong: {exc}")
 
-        st.session_state["admin_user"] = {
-            "id": admin.id,
-            "email": admin.email,
-            "first_name": admin.first_name,
-            "last_name": admin.last_name,
-            "is_super_admin": admin.is_super_admin,
-        }
-        st.session_state["admin_page"] = "Dashboard"
-        st.success(f"✅ Welcome back, {admin.first_name}.")
-        st.rerun()
+        if admin is not None:
+            st.session_state["admin_user"] = {
+                "id": admin.id,
+                "email": admin.email,
+                "first_name": admin.first_name,
+                "last_name": admin.last_name,
+                "is_super_admin": admin.is_super_admin,
+            }
+            st.session_state["admin_page"] = "Dashboard"
+            st.session_state["admin_login_log_id"] = log_admin_login(admin.id)
+            log_admin_activity(admin.id, "admin_login")
+            st.success(f"✅ Welcome back, {admin.first_name}.")
+            st.rerun()
 
     st.markdown("---")
     if st.button("← Back to LearnMate AI", key="admin_login_back"):
