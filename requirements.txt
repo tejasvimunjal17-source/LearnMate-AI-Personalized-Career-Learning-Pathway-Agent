@@ -3,6 +3,7 @@ python-dotenv>=1.0.1
 requests>=2.32.3
 plotly>=5.24.0
 pandas>=2.2.2
+openpyxl>=3.1.5
 reportlab>=4.2.5
 Pillow>=10.4.0
 streamlit-lottie>=0.0.5
