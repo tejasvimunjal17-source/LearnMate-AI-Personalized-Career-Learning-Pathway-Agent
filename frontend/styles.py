@@ -327,6 +327,15 @@ def inject_css(dark_mode: bool = True) -> None:
             font-size: 0.85rem;
             color: var(--text-muted);
         }}
+        .lm-topnav-links a {{
+            color: inherit;
+            text-decoration: none;
+            cursor: pointer;
+            transition: color 0.2s ease;
+        }}
+        .lm-topnav-links a:hover {{
+            color: #7C5CFF;
+        }}
         @media (max-width: 640px) {{
             .lm-topnav-links {{ display: none; }} /* collapses on mobile - hamburger sidebar covers nav */
         }}
