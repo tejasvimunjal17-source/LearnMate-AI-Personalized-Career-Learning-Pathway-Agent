@@ -1,7 +1,12 @@
 """
 frontend/custom_sidebar.py
 -----------------------------
-A Gmail/Drive-style collapsible sidebar "drawer" for LearnMate AI.
+A Gmail/Drive-style collapsible sidebar "drawer" mechanism for LearnMate AI.
+Used by BOTH the regular user app (via render_custom_sidebar_controls, the
+original public function - unchanged name/signature/behavior) and the
+Admin Panel (via render_admin_sidebar_controls, added so the Admin Panel
+gets the identical professional collapse/expand experience without
+duplicating ~150 lines of CSS).
 
 How it works (read before touching this file)
 ------------------------------------------------
@@ -25,42 +30,50 @@ match what the layout engine reserved space for.
 of the normal document flow, no grid/flexbox sizing algorithm affects it
 anymore - it becomes an independent floating layer, and `transform:
 translateX()` slides that whole layer (identical width at all times, so
-nothing inside it "shrinks" or "clips") fully on/off screen. This is a
-layout-independent technique, not dependent on which internal layout
-model this particular Streamlit version uses.
+nothing inside it "shrinks" or "clips") fully on/off screen.
 
 Because the sidebar is no longer part of the flex/grid flow, main
-content no longer reflows into its space automatically - so on desktop
-this file also sets an explicit `margin-left` on the main content
-container, toggled in sync with the same transition. On mobile, the
-drawer instead overlays on top of the content (no margin shift), with a
-tap-to-close backdrop - matching how the Gmail/Drive Android drawer
-behaves.
+content no longer reflows into its space automatically - so this file
+also sets an explicit `margin-left` + `width: calc(100% - drawer width)`
+on the main content container on desktop, toggled in sync with the same
+transition (the width/max-width constraint is what prevents the
+main-content overflow/shift bug that a margin-left alone would cause -
+see the comment inside _render_drawer_css). On mobile, the drawer instead
+overlays on top of the content (no margin shift), with a tap-to-close
+backdrop - matching how the Gmail/Drive Android drawer behaves.
 
 The only Streamlit-internal selectors touched are:
 
     section[data-testid="stSidebar"]         - the sidebar, repositioned
                                                 fixed + slid via transform
     section[data-testid="stMain"], .main     - main content, margin-left
-                                                animated on desktop only
+                                                + width animated on desktop
     [data-testid="collapsedControl"],
     [data-testid="stSidebarCollapseButton"]  - Streamlit's own native
                                                 collapse arrow, hidden
                                                 (display:none) since our
-                                                🎓 button replaces it
+                                                toggle button replaces it
 
-Everything inside the existing `with st.sidebar:` block in app.py (logo,
-nav menu, Dark Mode, Logout, status captions) is completely untouched -
-nothing is moved out of st.sidebar.
+Whatever is rendered inside `with st.sidebar:` (in either app.py for the
+regular user, or frontend/admin_panel.py for the Admin Panel) is
+completely untouched by this file - nothing is moved out of st.sidebar.
 
-State
-------
-st.session_state["sidebar_open"] is the single source of truth (default
-True). No JavaScript state, no browser storage - a plain Python boolean,
-recomputed into CSS on every rerun.
+Independence between the user sidebar and the Admin Panel sidebar
+----------------------------------------------------------------------
+The two callers use entirely separate state keys and entirely separate
+Streamlit widget key prefixes (see USER_SIDEBAR / ADMIN_SIDEBAR below),
+so opening/closing one has zero effect on the other's state - they only
+share the underlying CSS-generation *code*, not any session state. Since
+app.py's ADMIN_MODE gate always st.stop()s before the regular user flow
+would render (and vice versa), the two toggle buttons/backdrops are also
+never mounted on the same page at the same time, so there is no risk of
+duplicate-key or visual-overlap issues between them despite reusing the
+same fixed screen position.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import streamlit as st
 
@@ -69,35 +82,43 @@ _DRAWER_WIDTH_MOBILE = "min(21rem, 85vw)"
 _TRANSITION_MS = 300
 
 
-def render_custom_sidebar_controls() -> None:
-    """Render the 🎓 drawer toggle, the mobile tap-to-close backdrop, and
-    apply the resulting open/closed CSS.
+@dataclass(frozen=True)
+class _SidebarSpec:
+    state_key: str        # st.session_state key holding open/closed (bool)
+    key_prefix: str        # Streamlit widget key prefix (must be unique per sidebar)
+    icon: str                # toggle button glyph
 
-    Call this once, early in app.py, OUTSIDE of `with st.sidebar:` - both
-    the toggle button and the backdrop are independent, fixed-position
-    elements, so they don't need to live inside the sidebar to work.
-    """
-    st.session_state.setdefault("sidebar_open", True)
-    is_open = st.session_state["sidebar_open"]
+
+USER_SIDEBAR = _SidebarSpec(state_key="sidebar_open", key_prefix="lm_drawer", icon="🎓")
+ADMIN_SIDEBAR = _SidebarSpec(state_key="admin_sidebar_open", key_prefix="lm_admin_drawer", icon="🛡️")
+
+
+def _render_drawer(spec: _SidebarSpec) -> None:
+    """Render one drawer's toggle button, mobile backdrop, and CSS. Shared
+    implementation behind both public functions below - see _SidebarSpec
+    for what actually varies between the user and admin drawers."""
+    st.session_state.setdefault(spec.state_key, True)
+    is_open = st.session_state[spec.state_key]
+
+    toggle_container_key = f"{spec.key_prefix}_toggle"
+    toggle_btn_key = f"{spec.key_prefix}_toggle_btn"
+    backdrop_container_key = f"{spec.key_prefix}_backdrop"
+    backdrop_btn_key = f"{spec.key_prefix}_backdrop_btn"
 
     # ---- Toggle button: always visible, always in the same spot. ----
-    with st.container(key="lm_drawer_toggle"):
-        toggle_clicked = st.button(
-            "🎓", key="lm_drawer_toggle_btn", help="Open / Close Navigation"
-        )
+    with st.container(key=toggle_container_key):
+        toggle_clicked = st.button(spec.icon, key=toggle_btn_key, help="Open / Close Navigation")
 
     # ---- Mobile tap-to-close backdrop: a real (always-rendered) button,
     # shown only via a CSS media query on small screens and only while the
     # drawer is open. Clicking it closes the drawer, same as tapping
     # outside a Gmail/Drive Android drawer. ----
-    with st.container(key="lm_drawer_backdrop"):
-        backdrop_clicked = st.button(
-            "", key="lm_drawer_backdrop_btn", help="Close navigation"
-        )
+    with st.container(key=backdrop_container_key):
+        backdrop_clicked = st.button("", key=backdrop_btn_key, help="Close navigation")
 
     if toggle_clicked or (backdrop_clicked and is_open):
-        st.session_state["sidebar_open"] = not st.session_state["sidebar_open"]
-        is_open = st.session_state["sidebar_open"]
+        st.session_state[spec.state_key] = not st.session_state[spec.state_key]
+        is_open = st.session_state[spec.state_key]
 
     transform = "translateX(0)" if is_open else "translateX(-100%)"
     backdrop_display = "block" if is_open else "none"
@@ -108,13 +129,13 @@ def render_custom_sidebar_controls() -> None:
         <style>
         /* ---- Fixed toggle button: always visible, always in the same
         spot, regardless of the drawer's open/closed state. ---- */
-        div[class*="st-key-lm_drawer_toggle"] {{
+        div[class*="st-key-{toggle_container_key}"] {{
             position: fixed;
             top: 14px;
             left: 14px;
             z-index: 1000000;
         }}
-        div[class*="st-key-lm_drawer_toggle_btn"] button {{
+        div[class*="st-key-{toggle_btn_key}"] button {{
             width: 44px;
             height: 44px;
             border-radius: 14px;
@@ -123,7 +144,7 @@ def render_custom_sidebar_controls() -> None:
             box-shadow: 0 6px 18px rgba(124,92,255,0.30);
             transition: transform 280ms ease, box-shadow 280ms ease;
         }}
-        div[class*="st-key-lm_drawer_toggle_btn"] button:hover {{
+        div[class*="st-key-{toggle_btn_key}"] button:hover {{
             transform: translateY(-2px) scale(1.05);
             box-shadow: 0 10px 24px rgba(124,92,255,0.45);
         }}
@@ -164,8 +185,7 @@ def render_custom_sidebar_controls() -> None:
         it owns the full viewport width on its own. Adding margin-left
         on top of that already-100%-wide box pushes the total occupied
         width to 100% + drawer width, overflowing past the right edge of
-        the screen - which is what caused the shift/clipping/misalignment
-        this block fixes. Explicitly constraining width/max-width to
+        the screen. Explicitly constraining width/max-width to
         `calc(100% - drawer width)` guarantees the box always fits
         exactly beside the drawer, however Streamlit's internal
         flex/grid sizing happens to compute it. ---- */
@@ -178,30 +198,27 @@ def render_custom_sidebar_controls() -> None:
             }}
         }}
 
-        /* ---- Defensive guard: even with the width/margin math above
-        correct, a fixed-position sidebar layer sliding via translateX()
-        can still momentarily register as page content during the
-        transition on some browsers, which would show a horizontal
-        scrollbar/shift. This never clips anything (nothing in the actual
-        layout is ever wider than the viewport once the rule above is
-        applied) - it only suppresses that transitional artifact. ---- */
+        /* ---- Defensive guard against a momentary horizontal scrollbar
+        during the translateX() transition on some browsers. Never clips
+        real content - nothing in the layout is wider than the viewport
+        once the rule above is applied. ---- */
         html, body, .stApp {{
             overflow-x: hidden !important;
         }}
 
         /* ---- Mobile tap-to-close backdrop: invisible/inert on desktop,
         a dim full-screen tap target on mobile while the drawer is open. ---- */
-        div[class*="st-key-lm_drawer_backdrop"] {{
+        div[class*="st-key-{backdrop_container_key}"] {{
             display: none;
         }}
         @media (max-width: 640px) {{
-            div[class*="st-key-lm_drawer_backdrop"] {{
+            div[class*="st-key-{backdrop_container_key}"] {{
                 display: {backdrop_display};
                 position: fixed;
                 inset: 0;
                 z-index: 999997;
             }}
-            div[class*="st-key-lm_drawer_backdrop_btn"] button {{
+            div[class*="st-key-{backdrop_btn_key}"] button {{
                 width: 100%;
                 height: 100%;
                 background: rgba(0,0,0,0.45) !important;
@@ -212,8 +229,8 @@ def render_custom_sidebar_controls() -> None:
         }}
 
         /* ---- Hide Streamlit's own native collapse control - fully
-        replaced by our 🎓 button above. Presentational display:none only,
-        not a click or a state read. ---- */
+        replaced by our toggle button above. Presentational display:none
+        only, not a click or a state read. ---- */
         div[data-testid="stSidebarCollapseButton"],
         div[data-testid="collapsedControl"] {{
             display: none !important;
@@ -222,3 +239,31 @@ def render_custom_sidebar_controls() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_custom_sidebar_controls() -> None:
+    """Render the 🎓 drawer toggle, the mobile tap-to-close backdrop, and
+    apply the resulting open/closed CSS, for the regular (non-admin) app.
+
+    Call this once, early in app.py, OUTSIDE of `with st.sidebar:` - both
+    the toggle button and the backdrop are independent, fixed-position
+    elements, so they don't need to live inside the sidebar to work.
+
+    Unchanged from before this file was refactored to support the Admin
+    Panel too - same name, same signature, same behavior, same
+    st.session_state["sidebar_open"] key.
+    """
+    _render_drawer(USER_SIDEBAR)
+
+
+def render_admin_sidebar_controls() -> None:
+    """The Admin Panel's equivalent of render_custom_sidebar_controls():
+    same collapsible-drawer mechanism, same visual treatment, but with the
+    🛡️ icon and its own independent st.session_state["admin_sidebar_open"]
+    key and widget key prefix - opening/closing this one has no effect on
+    the regular user sidebar's state, and vice versa.
+
+    Call this once, early in frontend/admin_panel.py's render_admin_panel(),
+    OUTSIDE of `with st.sidebar:` - same placement rule as the user version.
+    """
+    _render_drawer(ADMIN_SIDEBAR)
