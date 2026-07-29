@@ -155,12 +155,38 @@ def render_custom_sidebar_controls() -> None:
         /* ---- Desktop only: main content margin shifts in sync with the
         drawer, since it's no longer a flex/grid sibling that reflows on
         its own. On mobile the drawer overlays instead (no margin shift -
-        see the backdrop below). ---- */
+        see the backdrop below).
+
+        Why width/max-width are set here too, not just margin-left: once
+        the sidebar is taken out of flow (position: fixed, above), the
+        flex container that normally splits space between sidebar + main
+        no longer reserves any room for it - stMain ends up sized as if
+        it owns the full viewport width on its own. Adding margin-left
+        on top of that already-100%-wide box pushes the total occupied
+        width to 100% + drawer width, overflowing past the right edge of
+        the screen - which is what caused the shift/clipping/misalignment
+        this block fixes. Explicitly constraining width/max-width to
+        `calc(100% - drawer width)` guarantees the box always fits
+        exactly beside the drawer, however Streamlit's internal
+        flex/grid sizing happens to compute it. ---- */
         @media (min-width: 641px) {{
             section[data-testid="stMain"], .main {{
                 margin-left: {main_margin} !important;
-                transition: margin-left {_TRANSITION_MS}ms ease;
+                width: calc(100% - {main_margin}) !important;
+                max-width: calc(100% - {main_margin}) !important;
+                transition: margin-left {_TRANSITION_MS}ms ease, width {_TRANSITION_MS}ms ease;
             }}
+        }}
+
+        /* ---- Defensive guard: even with the width/margin math above
+        correct, a fixed-position sidebar layer sliding via translateX()
+        can still momentarily register as page content during the
+        transition on some browsers, which would show a horizontal
+        scrollbar/shift. This never clips anything (nothing in the actual
+        layout is ever wider than the viewport once the rule above is
+        applied) - it only suppresses that transitional artifact. ---- */
+        html, body, .stApp {{
+            overflow-x: hidden !important;
         }}
 
         /* ---- Mobile tap-to-close backdrop: invisible/inert on desktop,
