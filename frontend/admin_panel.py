@@ -29,6 +29,7 @@ from frontend.admin_broadcast_page import render_admin_broadcast_page
 from frontend.admin_analytics_page import render_admin_analytics_page
 from frontend.admin_export_page import render_admin_export_page
 from backend.activity_logger import log_admin_activity, log_logout
+from frontend.custom_sidebar import render_admin_sidebar_controls
 
 ADMIN_NAV_OPTIONS = ["Dashboard", "Database", "Users", "Feedback", "Announcements", "Notifications", "Analytics", "Export"]
 ADMIN_NAV_ICONS = ["speedometer2", "database", "people", "chat-left-text", "megaphone", "bell", "graph-up", "download"]
@@ -56,6 +57,14 @@ def render_admin_panel() -> None:
         return
 
     admin = st.session_state["admin_user"]
+
+    # Collapsible drawer for the Admin Panel - same mechanism as the
+    # regular user sidebar (frontend/custom_sidebar.py), but with its own
+    # 🛡️ icon and its own independent session_state key
+    # ("admin_sidebar_open"), so it never reads or affects the user
+    # sidebar's open/closed state. Must be called OUTSIDE `with st.sidebar:`,
+    # same placement rule as render_custom_sidebar_controls() in app.py.
+    render_admin_sidebar_controls()
 
     with st.sidebar:
         st.markdown(
