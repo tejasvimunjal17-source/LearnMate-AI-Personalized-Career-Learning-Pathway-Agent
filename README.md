@@ -1,27 +1,3 @@
-# 🧭 LearnMate AI — Career Learning Platform
-
-![Image Alt](https://github.com/tejasvimunjal17-source/LearnMate-AI-Personalized-Career-Learning-Pathway-Generator/blob/main/Learnmate%20AI%20Orchestrate%20Architecture%20Blueprint/LearnMate%20Al%20-%20Orchestrate%20Architecture%20Blueprint.png)
-
-An agentic, AI-powered career learning **SaaS platform** built with
-**Python + Streamlit**, using **IBM watsonx.ai** and **IBM Granite**
-foundation models to generate fully personalized learning roadmaps,
-skill-gap analyses, official course & certification recommendations, and
-downloadable PDF/Word reports — wrapped in a premium, responsive,
-glassmorphism UI with user accounts backed by **Google Sheets**.
-
-![status](https://img.shields.io/badge/status-production--ready-7C5CFF)
-![python](https://img.shields.io/badge/python-3.10%2B-22D3B0)
-![license](https://img.shields.io/badge/license-MIT-black)
-
-It is built only on IBM Cloud using IBM watsonx.ai (granite models).
-
-<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" alt="" style="max-width: 100%; display: inline-block;" data-target="animated-image.originalImage">
-
-Live At : https://learnmate-ai-personalized-career-learning-pathway-generator.streamlit.app/ 
-
-<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" alt="" style="max-width: 100%; display: inline-block;" data-target="animated-image.originalImage">
-
----
 
 ## ✨ Features
 
