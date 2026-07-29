@@ -14,8 +14,20 @@ import streamlit as st
 def render_topnav(authenticated: bool) -> None:
     """Fixed top navigation bar. Real navigation happens via the buttons
     rendered just under it (Streamlit can't put interactive widgets inside
-    raw HTML), which this bar visually anchors to."""
-    links = "🏠 Home &nbsp;·&nbsp; 👤 My Profile &nbsp;·&nbsp; 📊 Dashboard" if authenticated else "🏠 Home"
+    raw HTML), which this bar visually anchors to.
+
+    Exception: the unauthenticated bar's "Admin Panel" item IS a real,
+    working link — a plain <a href="?admin=1"> anchor. Clicking it sets
+    the `admin` query param, which app.py's existing ADMIN_MODE check
+    (st.query_params.get("admin") == "1") already reads on every run to
+    decide whether to render the Admin Panel. No new route, no new page,
+    no change to that check — this just gives it a real entry point from
+    the landing page instead of only the authenticated sidebar button.
+    """
+    if authenticated:
+        links = "🏠 Home &nbsp;·&nbsp; 👤 My Profile &nbsp;·&nbsp; 📊 Dashboard"
+    else:
+        links = '<a href="?admin=1" target="_self">🛠️ Admin Panel</a>'
     st.markdown(
         f"""
         <div class="lm-topnav">
