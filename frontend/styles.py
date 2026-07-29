@@ -464,6 +464,7 @@ def inject_css(dark_mode: bool = True) -> None:
             box-shadow: none !important;
             border: none !important;
             height: 2.5rem !important;
+            pointer-events: none !important;
         }}
 
         /* Belt-and-suspenders: guarantee the reopen arrow is always visible
@@ -472,6 +473,7 @@ def inject_css(dark_mode: bool = True) -> None:
             visibility: visible !important;
             display: flex !important;
             opacity: 1 !important;
+            pointer-events: auto !important;
         }}
 
         /* Hide the Fork/GitHub link if applicable */
