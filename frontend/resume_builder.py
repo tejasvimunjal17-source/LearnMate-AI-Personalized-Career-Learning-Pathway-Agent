@@ -48,7 +48,10 @@ from backend.resume_ai import (
     generate_hr_email, generate_interview_questions, parse_resume_text_to_fields,
 )
 from backend.resume_review import extract_text_from_pdf, extract_text_from_docx
+from backend.logger_setup import get_logger
 from frontend.components import hero, glass_card_open, glass_card_close
+
+logger = get_logger(__name__)
 
 COLLEGE_LEVEL = "College / University"
 SCHOOL_LEVEL = "School (10th / 12th)"
@@ -122,6 +125,10 @@ def _init_state() -> None:
     for k in ("ats_result", "keyword_suggestions", "cover_letter", "linkedin_about",
               "portfolio_blurb", "hr_email", "interview_questions", "import_message"):
         st.session_state.setdefault(f"resume_ai_{k}", None)
+    # Holds a parsed "Import Resume" dict between reruns. NOT a widget key
+    # itself - see _apply_pending_import()/_render_import_section() for why
+    # this indirection exists (it's what fixes the resume_target_role crash).
+    st.session_state.setdefault("_resume_import_pending", None)
 
 
 def _remove_entry(state_key: str, entry_id: str) -> None:
@@ -455,24 +462,73 @@ def _apply_imported_fields(data: dict) -> None:
         ] or st.session_state["resume_certificates"]
 
 
+def _apply_pending_import() -> None:
+    """Apply a previously-parsed "Import Resume" dict to session_state.
+
+    MUST be called before any widget bound to one of these keys (e.g. the
+    `resume_target_role` text_input in _render_resume_settings) is
+    instantiated in this run - Streamlit forbids writing to
+    st.session_state[key] once a widget with that key has already been
+    created during the same script run.
+
+    The import button below never applies data directly for that exact
+    reason: it only stashes the parsed dict under the internal
+    "_resume_import_pending" key (which no widget uses) and reruns. On
+    the *next* run, this function runs first - before _render_resume_settings()
+    or any form field - so every st.session_state[...] write here is safe.
+    """
+    pending = st.session_state.get("_resume_import_pending")
+    if pending is not None:
+        _apply_imported_fields(pending)
+        st.session_state["_resume_import_pending"] = None
+        st.session_state["resume_ai_import_message"] = "✅ Form auto-filled - review and edit below."
+
+
 def _render_import_section() -> None:
     with st.expander("📥 Import an existing resume (PDF/DOCX) to auto-fill this form"):
         uploaded = st.file_uploader("Upload resume", type=["pdf", "docx"], key="resume_import_uploader")
         if st.button("Import & Auto-fill", key="resume_import_btn", disabled=uploaded is None):
-            with st.spinner("Reading your resume..."):
-                raw_bytes = uploaded.read()
-                text = (extract_text_from_pdf(raw_bytes) if uploaded.type == "application/pdf"
-                        else extract_text_from_docx(raw_bytes))
-                data = parse_resume_text_to_fields(text) if text else None
-            if not data:
+            st.session_state["resume_ai_import_message"] = None
+            try:
+                with st.status("Importing resume...", expanded=True) as status:
+                    status.write("📤 Uploading resume...")
+                    raw_bytes = uploaded.read()
+                    name = (uploaded.name or "").lower()
+                    is_pdf = uploaded.type == "application/pdf" or name.endswith(".pdf")
+
+                    status.write("🔎 Extracting text...")
+                    text = extract_text_from_pdf(raw_bytes) if is_pdf else extract_text_from_docx(raw_bytes)
+
+                    if not text:
+                        status.update(label="Couldn't read that file", state="error")
+                        st.session_state["resume_ai_import_message"] = (
+                            "Couldn't extract any text from that file - it may be a scanned "
+                            "image with no selectable text. Please fill the fields manually, "
+                            "or try uploading a text-based (not scanned) PDF/DOCX."
+                        )
+                    else:
+                        status.write("🤖 Analyzing with AI...")
+                        data = parse_resume_text_to_fields(text)
+
+                        if not data:
+                            status.update(label="Couldn't parse that resume", state="error")
+                            st.session_state["resume_ai_import_message"] = (
+                                "Could not extract resume. Please fill the fields manually."
+                            )
+                        else:
+                            status.write("✍️ Populating resume...")
+                            # Don't touch resume_* widget keys here - stash the
+                            # data and rerun; _apply_pending_import() (called
+                            # at the very top of the page, before any widget
+                            # exists) does the actual session_state writes.
+                            st.session_state["_resume_import_pending"] = data
+                            status.update(label="Done", state="complete")
+            except Exception as exc:  # noqa: BLE001 - importing must never crash the app
+                logger.error("Resume import failed unexpectedly: %s", exc)
                 st.session_state["resume_ai_import_message"] = (
-                    "Couldn't read that file automatically - try filling the form manually, "
-                    "or upload a text-based (not scanned) PDF/DOCX."
+                    "Could not extract resume. Please fill the fields manually."
                 )
-            else:
-                _apply_imported_fields(data)
-                st.session_state["resume_ai_import_message"] = "✅ Form auto-filled - review and edit below."
-                st.rerun()
+            st.rerun()
         if st.session_state["resume_ai_import_message"]:
             st.info(st.session_state["resume_ai_import_message"])
 
@@ -630,6 +686,10 @@ def _render_live_preview(profile: ResumeProfile) -> None:
 # ------------------------------------------------------------------
 def render_resume_builder_page():
     _init_state()
+    # Must run before ANY resume_* widget below (Resume Settings, Personal
+    # Details, etc.) is instantiated - see _apply_pending_import()'s
+    # docstring for why.
+    _apply_pending_import()
     user = st.session_state.get("auth_user") or {}
     if st.session_state["resume_first_name"] is None:
         st.session_state["resume_first_name"] = user.get("first_name", "")
