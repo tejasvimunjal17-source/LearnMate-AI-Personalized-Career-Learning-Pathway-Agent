@@ -336,6 +336,36 @@ def inject_css(dark_mode: bool = True) -> None:
         .lm-topnav-links a:hover {{
             color: #7C5CFF;
         }}
+
+        /* Admin Panel entry point on the public landing page — same
+           top-right position it already occupied in .lm-topnav-links,
+           restyled to be visually identical to the app's real gradient
+           button component (.stButton > button above), which is what
+           renders the "🛡️ Admin Panel" button in the authenticated
+           sidebar: same gradient, radius, padding, weight, shadow and
+           hover lift. Scoped selector (not just `a:hover`) so the
+           generic muted-link hover color above can't override it. */
+        .lm-topnav-links a.lm-topnav-admin-btn {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--gradient) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 12px !important;
+            padding: 0.6rem 1.3rem !important;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600 !important;
+            line-height: 1.2;
+            box-shadow: 0 6px 18px rgba(124,92,255,0.35);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }}
+        .lm-topnav-links a.lm-topnav-admin-btn:hover {{
+            color: white !important;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 24px rgba(124,92,255,0.45);
+        }}
         @media (max-width: 640px) {{
             .lm-topnav-links {{ display: none; }} /* collapses on mobile - hamburger sidebar covers nav */
         }}
