@@ -17,28 +17,24 @@ def render_topnav(authenticated: bool) -> None:
     raw HTML), which this bar visually anchors to.
 
     Exception: the unauthenticated bar's "Admin Panel" item IS a real,
-    working link — a plain <a href="?admin=1"> anchor, styled as a
-    premium gradient pill button via the `.lm-topnav-admin-btn` CSS class
-    (frontend/styles.py). Clicking it sets the `admin` query param, which
-    app.py's existing ADMIN_MODE check (st.query_params.get("admin") ==
-    "1") already reads on every run to decide whether to render the Admin
-    Panel. No new route, no new page, no change to that check, no change
-    to routing/auth/session logic — this is still the exact same anchor,
-    only visually restyled with a class and an inline SVG icon.
+    working link — a plain <a href="?admin=1"> anchor, positioned exactly
+    where it already was (top-right of this nav bar) and styled via the
+    `.lm-topnav-admin-btn` CSS class (frontend/styles.py) to look exactly
+    like the app's real `.stButton > button` gradient pill — the same
+    component that renders the authenticated sidebar's "🛡️ Admin Panel"
+    button in app.py: same gradient, radius, padding, weight, shadow, and
+    hover lift, same "🛡️ Admin Panel" label. Clicking it sets the `admin`
+    query param, which app.py's existing ADMIN_MODE check
+    (st.query_params.get("admin") == "1") already reads on every run to
+    decide whether to render the Admin Panel. No new route, no new page,
+    no sidebar, no change to app.py, no change to routing/auth/session
+    logic — this is still the exact same anchor that was already here,
+    only its visual styling was improved.
     """
     if authenticated:
         links = "🏠 Home &nbsp;·&nbsp; 👤 My Profile &nbsp;·&nbsp; 📊 Dashboard"
     else:
-        shield_svg = (
-            '<svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" '
-            'xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">'
-            '<path d="M8 0c-.69 0-1.843.265-2.928.56-1.11.3-2.229.655-2.887.87a1.54 1.54 0 0 0-1.044 '
-            '1.262c-.596 4.477.787 7.795 2.465 9.99a11.777 11.777 0 0 0 2.517 2.453c.386.273.744.482 '
-            '1.048.625.28.132.581.24.829.24s.548-.108.829-.24a7.66 7.66 0 0 0 1.048-.625 11.775 11.775 '
-            '0 0 0 2.517-2.453c1.678-2.195 3.061-5.513 2.465-9.99a1.541 1.541 0 0 0-1.044-1.263 '
-            '62.467 62.467 0 0 0-2.887-.87C9.843.266 8.69 0 8 0z"/></svg>'
-        )
-        links = f'<a href="?admin=1" target="_self" class="lm-topnav-admin-btn">{shield_svg}Admin Panel</a>'
+        links = '<a href="?admin=1" target="_self" class="lm-topnav-admin-btn">🛡️ Admin Panel</a>'
     st.markdown(
         f"""
         <div class="lm-topnav">
