@@ -1,6 +1,6 @@
 # 🧭 LearnMate AI — Career Learning Platform
 
-![Image Alt](https://github.com/tejasvimunjal17-source/LearnMate-AI-Personalized-Career-Learning-Pathway-Generator/blob/main/Learnmate%20AI%20Orchestrate%20Architecture%20Blueprint/LearnMate%20Al%20-%20Orchestrate%20Architecture%20Blueprint.png)
+![Image Alt](https://github.com/tejasvimunjal17-source/Let-s-Magic/blob/main/file_0000000073448230a125e552f72baab0.png)
 
 An agentic, AI-powered career learning **SaaS platform** built with
 **Python + Streamlit**, using **IBM watsonx.ai** and **IBM Granite**
@@ -19,7 +19,7 @@ generation, with Supabase as the application database.
 
 <img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" alt="" style="max-width: 100%; display: inline-block;" data-target="animated-image.originalImage">
 
-Live At : https://learnmate-ai-personalized-career-learning-pathway-generator.streamlit.app/
+Live At : https://learnmate-ai-personalized-career-learning-pathway-agent.streamlit.app/
 
 <img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" alt="" style="max-width: 100%; display: inline-block;" data-target="animated-image.originalImage">
 
