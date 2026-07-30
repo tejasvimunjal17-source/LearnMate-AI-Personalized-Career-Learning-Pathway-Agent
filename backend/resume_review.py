@@ -37,8 +37,45 @@ REVIEWS_SHEET_HEADER: list[str] = [
 # ------------------------------------------------------------------
 # Text extraction
 # ------------------------------------------------------------------
-def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extract raw text from an uploaded PDF's bytes using pypdf."""
+def _extract_text_pymupdf(file_bytes: bytes) -> str:
+    """Fast path: PyMuPDF (fitz). Dramatically faster than pypdf for
+    text-based PDFs. Returns "" (never raises) if fitz isn't installed
+    or the file can't be parsed, so callers can fall back cleanly."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return ""
+    try:
+        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+            pages = [page.get_text() or "" for page in doc]
+        return "\n".join(pages).strip()
+    except Exception as exc:  # noqa: BLE001 - fall back, don't crash
+        logger.warning("PyMuPDF text extraction failed, will try fallback: %s", exc)
+        return ""
+
+
+def _extract_text_pdfplumber(file_bytes: bytes) -> str:
+    """Second fallback: pdfplumber. Slower than fitz but handles some
+    layouts fitz misses. Returns "" (never raises) on any failure."""
+    try:
+        import pdfplumber
+    except ImportError:
+        return ""
+    try:
+        pages: list[str] = []
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                pages.append(page.extract_text() or "")
+        return "\n".join(pages).strip()
+    except Exception as exc:  # noqa: BLE001 - fall back, don't crash
+        logger.warning("pdfplumber text extraction failed, will try fallback: %s", exc)
+        return ""
+
+
+def _extract_text_pypdf(file_bytes: bytes) -> str:
+    """Last resort before giving up: pypdf (the original implementation).
+    Kept as the final fallback since it's already a project dependency
+    and reliably opens files the other two occasionally choke on."""
     from pypdf import PdfReader
 
     try:
@@ -54,6 +91,29 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         except Exception:  # noqa: BLE001 - a single bad page shouldn't kill the read
             logger.warning("Failed to extract text from a PDF page; skipping it.")
     return "\n".join(pages).strip()
+
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Extract raw text from an uploaded PDF's bytes.
+
+    Tries the fastest local extractor first and only falls through to
+    slower ones if it comes back empty:
+        1. PyMuPDF (fitz)   - fast, handles the vast majority of PDFs
+        2. pdfplumber       - slower, sometimes recovers text fitz misses
+        3. pypdf            - final fallback (original implementation)
+
+    OCR is intentionally never attempted here - it's slow (many seconds
+    per page) and out of scope for this import flow. If none of the
+    three text-layer extractors find anything, the PDF is almost
+    certainly a scanned image with no selectable text, and the caller
+    shows a "couldn't read that file - please fill in manually" message
+    instead of hanging on an OCR pass.
+    """
+    for extractor in (_extract_text_pymupdf, _extract_text_pdfplumber, _extract_text_pypdf):
+        text = extractor(file_bytes)
+        if text:
+            return text
+    return ""
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
