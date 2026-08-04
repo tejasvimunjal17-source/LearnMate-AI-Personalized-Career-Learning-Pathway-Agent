@@ -126,7 +126,7 @@ def render_landing_page() -> None:
         <div class="lm-footer">
             <div>🧭 <strong>LearnMate AI</strong> — an AI Career Learning Platform</div>
             <div class="muted" style="font-size:0.8rem; margin-top:6px;">
-                Powered by IBM watsonx.ai (Granite) &middot; IBM watsonx Orchestrate &middot; Google Sheets
+                Powered by IBM watsonx.ai (Granite) &middot; IBM watsonx Orchestrate &middot; OpenRouter
             </div>
         </div>
         """,
