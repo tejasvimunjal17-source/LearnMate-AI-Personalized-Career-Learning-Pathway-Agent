@@ -404,12 +404,14 @@ def inject_css(dark_mode: bool = True) -> None:
             -webkit-text-fill-color: transparent;
         }}
         .lm-hero-sub {{
-            max-width: 620px;
+            width: min(800px, 100%);
             margin: 0 auto;
             text-align: center;
+            line-height: 1.7;
             color: var(--text-muted);
             font-size: 1.02rem;
-            line-height: 1.7;
+            padding-inline: 1rem;
+            box-sizing: border-box;
         }}
         .lm-section-title {{
             font-family: 'Space Grotesk', sans-serif;
